@@ -149,7 +149,10 @@ func ReadyHandler(exp *explorer.Explorer) http.HandlerFunc {
 		_, err := exp.DiscoverQueues(r.Context(), "bull")
 		if err != nil {
 			w.WriteHeader(http.StatusServiceUnavailable)
-			fmt.Fprintf(w, "Redis unavailable: %v", err)
+			_, err := fmt.Fprintf(w, "Redis unavailable: %v", err)
+			if err != nil {
+				return
+			}
 			return
 		}
 		w.WriteHeader(http.StatusOK)
