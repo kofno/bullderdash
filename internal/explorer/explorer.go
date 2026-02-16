@@ -47,6 +47,10 @@ func (e *Explorer) DiscoverQueues(ctx context.Context, prefix string) ([]string,
 		}
 	}
 
+	// Ensure we never return nil slice, return empty slice instead
+	if queues == nil {
+		queues = make([]string, 0)
+	}
 	return queues, nil
 }
 
@@ -94,43 +98,25 @@ func (e *Explorer) GetQueueStats(ctx context.Context, queues []string) ([]QueueS
 		metrics.RedisOperationDuration.WithLabelValues("get_queue_stats").Observe(time.Since(start).Seconds())
 	}()
 
-	pipe := e.client.Pipeline()
-
-	// Create map to hold the command results
-	type queueCmds struct {
-		wait      *redis.IntCmd
-		active    *redis.IntCmd
-		failed    *redis.IntCmd
-		completed *redis.IntCmd
-		delayed   *redis.IntCmd
-	}
-	cmds := make(map[string]queueCmds)
-
-	for _, q := range queues {
-		cmds[q] = queueCmds{
-			wait:      pipe.LLen(ctx, fmt.Sprintf("bull:%s:wait", q)),
-			active:    pipe.LLen(ctx, fmt.Sprintf("bull:%s:active", q)),
-			failed:    pipe.SCard(ctx, fmt.Sprintf("bull:%s:failed", q)),
-			completed: pipe.SCard(ctx, fmt.Sprintf("bull:%s:completed", q)),
-			delayed:   pipe.ZCard(ctx, fmt.Sprintf("bull:%s:delayed", q)),
-		}
-	}
-
-	_, err := pipe.Exec(ctx)
-	if err != nil && err != redis.Nil {
-		metrics.RedisOperationErrors.WithLabelValues("get_queue_stats").Inc()
-		return nil, err
-	}
-
 	var stats []QueueStats
+
+	// Get stats for each queue individually to handle errors per-queue
 	for _, q := range queues {
+		// Use individual commands instead of pipeline to handle per-queue errors
+		waitLen, _ := e.client.LLen(ctx, fmt.Sprintf("bull:%s:wait", q)).Result()
+		activeLen, _ := e.client.LLen(ctx, fmt.Sprintf("bull:%s:active", q)).Result()
+
+		failedCard, _ := e.client.SCard(ctx, fmt.Sprintf("bull:%s:failed", q)).Result()
+		completedCard, _ := e.client.SCard(ctx, fmt.Sprintf("bull:%s:completed", q)).Result()
+		delayedCard, _ := e.client.ZCard(ctx, fmt.Sprintf("bull:%s:delayed", q)).Result()
+
 		stat := QueueStats{
 			Name:      q,
-			Wait:      cmds[q].wait.Val(),
-			Active:    cmds[q].active.Val(),
-			Failed:    cmds[q].failed.Val(),
-			Completed: cmds[q].completed.Val(),
-			Delayed:   cmds[q].delayed.Val(),
+			Wait:      waitLen,
+			Active:    activeLen,
+			Failed:    failedCard,
+			Completed: completedCard,
+			Delayed:   delayedCard,
 		}
 		stats = append(stats, stat)
 
@@ -140,6 +126,11 @@ func (e *Explorer) GetQueueStats(ctx context.Context, queues []string) ([]QueueS
 		metrics.QueueFailed.WithLabelValues(q).Set(float64(stat.Failed))
 		metrics.QueueCompleted.WithLabelValues(q).Set(float64(stat.Completed))
 		metrics.QueueDelayed.WithLabelValues(q).Set(float64(stat.Delayed))
+	}
+
+	// Ensure we never return nil slice, return empty slice instead
+	if stats == nil {
+		stats = make([]QueueStats, 0)
 	}
 	return stats, nil
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"log"
 	"net/http"
 	"time"
 
@@ -19,19 +20,57 @@ const queueListTmpl = `
             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Queue</th>
             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider text-center">Waiting</th>
             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider text-center">Active</th>
+            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider text-center">Completed</th>
             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider text-center">Failed</th>
+            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider text-center">Delayed</th>
+            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider text-center">Actions</th>
         </tr>
     </thead>
     <tbody class="bg-white divide-y divide-gray-200">
         {{range .}}
-        <tr>
-            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{{.Name}}</td>
-            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">{{.Wait}}</td>
-            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center text-blue-600 font-bold">{{.Active}}</td>
+        <tr class="hover:bg-gray-50">
+            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-indigo-600">
+                <a href="/queue/{{.Name}}" class="hover:text-indigo-800">{{.Name}}</a>
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
+                {{if gt .Wait 0}}
+                    <a href="/queue/jobs?queue={{.Name}}&state=waiting" class="text-yellow-600 hover:text-yellow-800">{{.Wait}}</a>
+                {{else}}
+                    <span class="text-gray-400">{{.Wait}}</span>
+                {{end}}
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-center">
+                {{if gt .Active 0}}
+                    <a href="/queue/jobs?queue={{.Name}}&state=active" class="text-blue-600 font-bold hover:text-blue-800">{{.Active}}</a>
+                {{else}}
+                    <span class="text-gray-400">{{.Active}}</span>
+                {{end}}
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-center">
+                {{if gt .Completed 0}}
+                    <a href="/queue/jobs?queue={{.Name}}&state=completed" class="text-green-600 hover:text-green-800">{{.Completed}}</a>
+                {{else}}
+                    <span class="text-gray-400">{{.Completed}}</span>
+                {{end}}
+            </td>
             <td class="px-6 py-4 whitespace-nowrap text-sm text-center">
                 <span class="px-2 py-1 rounded text-xs {{if gt .Failed 0}}bg-red-100 text-red-800 font-bold{{else}}bg-gray-100 text-gray-400{{end}}">
-                    {{.Failed}}
+                    {{if gt .Failed 0}}
+                        <a href="/queue/jobs?queue={{.Name}}&state=failed" class="text-red-800 hover:text-red-900">{{.Failed}}</a>
+                    {{else}}
+                        {{.Failed}}
+                    {{end}}
                 </span>
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-center text-purple-600">
+                {{if gt .Delayed 0}}
+                    <a href="/queue/jobs?queue={{.Name}}&state=delayed" class="hover:text-purple-800">{{.Delayed}}</a>
+                {{else}}
+                    <span class="text-gray-400">{{.Delayed}}</span>
+                {{end}}
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-center">
+                <a href="/queue/{{.Name}}" class="text-indigo-600 hover:text-indigo-900">View →</a>
             </td>
         </tr>
         {{end}}
@@ -52,19 +91,28 @@ func DashboardHandler(exp *explorer.Explorer, prefix string) http.HandlerFunc {
 
 		queues, err := exp.DiscoverQueues(r.Context(), prefix)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			log.Printf("❌ DiscoverQueues error: %v", err)
+			http.Error(w, fmt.Sprintf("DiscoverQueues error: %v", err), http.StatusInternalServerError)
 			return
 		}
+		log.Printf("✅ Found %d queues: %v", len(queues), queues)
+
 		queueStats, err := exp.GetQueueStats(r.Context(), queues)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			log.Printf("❌ GetQueueStats error: %v", err)
+			http.Error(w, fmt.Sprintf("GetQueueStats error: %v", err), http.StatusInternalServerError)
 			return
 		}
+		log.Printf("✅ Got stats for %d queues: %+v", len(queueStats), queueStats)
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		err = tmpl.Execute(w, queueStats)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			log.Printf("❌ Template execution error: %v", err)
+			http.Error(w, fmt.Sprintf("Template error: %v", err), http.StatusInternalServerError)
 			return
 		}
+		log.Printf("✅ Template rendered successfully")
 	}
 }
 
