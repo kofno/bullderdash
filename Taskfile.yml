@@ -1,0 +1,42 @@
+# https://taskfile.dev
+
+version: '3'
+
+vars:
+  CLUSTER_NAME: bull-der-dash-dev
+  QUEUES: orders,emails,billing
+
+tasks:
+  up:
+    desc: Start the local development environment
+    cmds:
+      - kind create cluster --name bull-der-dash-dev --config kind-config.yaml
+      - kubectl apply -f valkey-dev.yaml
+      - task: sim-install
+
+  down:
+    desc: Stop and delete the local cluster
+    cmds:
+      - kind delete cluster --name {{.CLUSTER_NAME}}
+
+  sim-install:
+    dir: scripts/sim
+    cmds:
+      - bun install
+
+  sim-run:
+    desc: Run the TS simulator to generate job noise
+    dir: scripts/sim
+    env:
+      REDIS_URL: "redis://localhost:6379"
+      QUEUES: "{{.QUEUES}}"
+    cmds:
+      - bun run index.ts
+
+  dev:
+    desc: Run the Go dashboard locally
+    env:
+      REDIS_ADDR: "localhost:6379"
+      BULLMQ_QUEUES: "{{.QUEUES}}"
+    cmds:
+      - go run .
