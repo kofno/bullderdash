@@ -29,7 +29,12 @@ func main() {
 		Password: cfg.RedisPassword,
 		DB:       cfg.RedisDB,
 	})
-	defer rdb.Close()
+	defer func(rdb *redis.Client) {
+		err := rdb.Close()
+		if err != nil {
+			log.Printf("⚠️ Failed to close Redis connection: %v", err)
+		}
+	}(rdb)
 
 	// Test connection
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

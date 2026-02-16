@@ -14,7 +14,7 @@ async function simulate() {
     await queue.add('process-data', { foo: 'bar', timestamp: Date.now() });
 
     // Add a job that we'll pretend failed
-    const failedJob = await queue.add('critical-alert', { error: 'Simulated failure' });
+    await queue.add('critical-alert', { error: 'Simulated failure' });
 
     // In a real app, a worker would fail this, but for now, we're just
     // ensuring the keyspace (bull:queue:wait, etc.) exists.

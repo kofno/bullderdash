@@ -122,7 +122,11 @@ func JobDetailHandler(exp *explorer.Explorer) http.HandlerFunc {
 
 		// Return JSON for now - we can add HTML template later
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(job)
+		err = json.NewEncoder(w).Encode(job)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 }
 
@@ -130,7 +134,11 @@ func JobDetailHandler(exp *explorer.Explorer) http.HandlerFunc {
 func HealthHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, "OK")
+		_, err := fmt.Fprint(w, "OK")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 }
 
@@ -145,7 +153,10 @@ func ReadyHandler(exp *explorer.Explorer) http.HandlerFunc {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, "Ready")
+		_, err = fmt.Fprint(w, "Ready")
+		if err != nil {
+			return
+		}
 	}
 }
 

@@ -172,34 +172,61 @@ func (e *Explorer) GetJob(ctx context.Context, queueName, jobID string) (*Job, e
 		job.Name = name
 	}
 	if dataStr, ok := data["data"]; ok {
-		json.Unmarshal([]byte(dataStr), &job.Data)
+		err := json.Unmarshal([]byte(dataStr), &job.Data)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if optsStr, ok := data["opts"]; ok {
-		json.Unmarshal([]byte(optsStr), &job.Opts)
+		err := json.Unmarshal([]byte(optsStr), &job.Opts)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if progressStr, ok := data["progress"]; ok {
-		json.Unmarshal([]byte(progressStr), &job.Progress)
+		err := json.Unmarshal([]byte(progressStr), &job.Progress)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if timestamp, ok := data["timestamp"]; ok {
-		fmt.Sscanf(timestamp, "%d", &job.Timestamp)
+		_, err := fmt.Sscanf(timestamp, "%d", &job.Timestamp)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if attemptsMade, ok := data["attemptsMade"]; ok {
-		fmt.Sscanf(attemptsMade, "%d", &job.AttemptsMade)
+		_, err := fmt.Sscanf(attemptsMade, "%d", &job.AttemptsMade)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if failedReason, ok := data["failedReason"]; ok {
 		job.FailedReason = failedReason
 	}
 	if stacktrace, ok := data["stacktrace"]; ok {
-		json.Unmarshal([]byte(stacktrace), &job.StackTrace)
+		err := json.Unmarshal([]byte(stacktrace), &job.StackTrace)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if returnValue, ok := data["returnvalue"]; ok {
-		json.Unmarshal([]byte(returnValue), &job.ReturnValue)
+		err := json.Unmarshal([]byte(returnValue), &job.ReturnValue)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if finishedOn, ok := data["finishedOn"]; ok {
-		fmt.Sscanf(finishedOn, "%d", &job.FinishedOn)
+		_, err := fmt.Sscanf(finishedOn, "%d", &job.FinishedOn)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if processedOn, ok := data["processedOn"]; ok {
-		fmt.Sscanf(processedOn, "%d", &job.ProcessedOn)
+		_, err := fmt.Sscanf(processedOn, "%d", &job.ProcessedOn)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Determine job state by checking which list/set it's in
