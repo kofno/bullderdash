@@ -24,6 +24,9 @@ const queueListTmpl = `
             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider text-center">Completed</th>
             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider text-center">Failed</th>
             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider text-center">Delayed</th>
+            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider text-center">Stalled</th>
+            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider text-center">Orphaned</th>
+            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider text-center">Total</th>
             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider text-center">Actions</th>
         </tr>
     </thead>
@@ -69,6 +72,23 @@ const queueListTmpl = `
                 {{else}}
                     <span class="text-gray-400">{{.Delayed}}</span>
                 {{end}}
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-center">
+                {{if gt .Stalled 0}}
+                    <span class="px-2 py-1 rounded text-xs bg-orange-100 text-orange-800 font-bold">{{.Stalled}}</span>
+                {{else}}
+                    <span class="text-gray-400">{{.Stalled}}</span>
+                {{end}}
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-center">
+                {{if gt .Orphaned 0}}
+                    <span class="px-2 py-1 rounded text-xs bg-gray-200 text-gray-700">{{.Orphaned}}</span>
+                {{else}}
+                    <span class="text-gray-400">{{.Orphaned}}</span>
+                {{end}}
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-center font-bold text-gray-900">
+                {{.Total}}
             </td>
             <td class="px-6 py-4 whitespace-nowrap text-sm text-center">
                 <a href="/queue/{{.Name}}" class="text-indigo-600 hover:text-indigo-900">View →</a>
@@ -431,8 +451,21 @@ const queueDetailTmpl = `
             <td class="px-6 py-4 text-sm text-center">{{.Data.Stat.Delayed}}</td>
             <td class="px-6 py-4 text-sm text-gray-600">{{if .Data.Delayed}}{{(index .Data.Delayed 0).ID}}{{else}}—{{end}}</td>
         </tr>
-    </tbody>
-</table>
+        <tr>
+            <td class="px-6 py-4 text-sm text-orange-700 font-semibold">🔒 Stalled</td>
+            <td class="px-6 py-4 text-sm text-center"><span class="px-2 py-1 rounded text-xs bg-orange-100 text-orange-800 font-bold">{{.Data.Stat.Stalled}}</span></td>
+            <td class="px-6 py-4 text-sm text-gray-600">—</td>
+        </tr>
+        <tr>
+            <td class="px-6 py-4 text-sm text-gray-700 font-semibold">👻 Orphaned</td>
+            <td class="px-6 py-4 text-sm text-center"><span class="px-2 py-1 rounded text-xs bg-gray-200 text-gray-700">{{.Data.Stat.Orphaned}}</span></td>
+            <td class="px-6 py-4 text-sm text-gray-600">—</td>
+        </tr>
+        <tr>
+            <td class="px-6 py-4 text-sm text-gray-900 font-bold">📊 Total</td>
+            <td class="px-6 py-4 text-sm text-center"><span class="px-2 py-1 rounded text-xs bg-gray-900 text-white font-bold">{{.Data.Stat.Total}}</span></td>
+            <td class="px-6 py-4 text-sm text-gray-600">—</td>
+        </tr>
 
 <div class="space-y-8">
     {{if .Data.Waiting}}

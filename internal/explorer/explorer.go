@@ -61,6 +61,9 @@ type QueueStats struct {
 	Failed    int64
 	Completed int64
 	Delayed   int64
+	Stalled   int64
+	Orphaned  int64
+	Total     int64
 }
 
 // Job represents a BullMQ job
@@ -102,13 +105,92 @@ func (e *Explorer) GetQueueStats(ctx context.Context, queues []string) ([]QueueS
 
 	// Get stats for each queue individually to handle errors per-queue
 	for _, q := range queues {
-		// Use individual commands instead of pipeline to handle per-queue errors
-		waitLen, _ := e.client.LLen(ctx, fmt.Sprintf("bull:%s:wait", q)).Result()
-		activeLen, _ := e.client.LLen(ctx, fmt.Sprintf("bull:%s:active", q)).Result()
+		prefix := fmt.Sprintf("bull:%s", q)
 
-		failedCard, _ := e.client.SCard(ctx, fmt.Sprintf("bull:%s:failed", q)).Result()
-		completedCard, _ := e.client.SCard(ctx, fmt.Sprintf("bull:%s:completed", q)).Result()
-		delayedCard, _ := e.client.ZCard(ctx, fmt.Sprintf("bull:%s:delayed", q)).Result()
+		// Use individual commands instead of pipeline to handle per-queue errors
+		waitLen, _ := e.client.LLen(ctx, prefix+":wait").Result()
+		activeLen, _ := e.client.LLen(ctx, prefix+":active").Result()
+
+		failedCard, _ := e.client.SCard(ctx, prefix+":failed").Result()
+		completedCard, _ := e.client.SCard(ctx, prefix+":completed").Result()
+		delayedCard, _ := e.client.ZCard(ctx, prefix+":delayed").Result()
+		stalledCard, _ := e.client.ZCard(ctx, prefix+":stalled").Result()
+
+		// Count total job hashes (all keys matching the job ID pattern)
+		var totalJobHashes int64
+		cursor := uint64(0)
+		jobIDsInQueues := make(map[string]bool)
+
+		// First, collect all job IDs that are in state lists
+		if waitIDs, err := e.client.LRange(ctx, prefix+":wait", 0, -1).Result(); err == nil {
+			for _, id := range waitIDs {
+				jobIDsInQueues[id] = true
+			}
+		}
+		if activeIDs, err := e.client.LRange(ctx, prefix+":active", 0, -1).Result(); err == nil {
+			for _, id := range activeIDs {
+				jobIDsInQueues[id] = true
+			}
+		}
+		if failedIDs, err := e.client.SMembers(ctx, prefix+":failed").Result(); err == nil {
+			for _, id := range failedIDs {
+				jobIDsInQueues[id] = true
+			}
+		}
+		if completedIDs, err := e.client.SMembers(ctx, prefix+":completed").Result(); err == nil {
+			for _, id := range completedIDs {
+				jobIDsInQueues[id] = true
+			}
+		}
+		if delayedResults, err := e.client.ZRangeWithScores(ctx, prefix+":delayed", 0, -1).Result(); err == nil {
+			for _, z := range delayedResults {
+				if id, ok := z.Member.(string); ok {
+					jobIDsInQueues[id] = true
+				}
+			}
+		}
+		if stalledResults, err := e.client.ZRangeWithScores(ctx, prefix+":stalled", 0, -1).Result(); err == nil {
+			for _, z := range stalledResults {
+				if id, ok := z.Member.(string); ok {
+					jobIDsInQueues[id] = true
+				}
+			}
+		}
+
+		// Now scan for all job hash keys (excluding metadata keys like :id, :meta, :events, :active, etc.)
+		for {
+			keys, nextCursor, err := e.client.Scan(ctx, cursor, prefix+":*", 100).Result()
+			if err != nil {
+				break
+			}
+
+			for _, key := range keys {
+				// Extract the suffix after the queue name
+				suffix := strings.TrimPrefix(key, prefix+":")
+
+				// Skip metadata keys and state list keys
+				if suffix == "id" || suffix == "meta" || suffix == "events" ||
+					suffix == "wait" || suffix == "active" || suffix == "failed" ||
+					suffix == "completed" || suffix == "delayed" || suffix == "stalled" ||
+					suffix == "paused" || suffix == "priority" {
+					continue
+				}
+
+				// This is a job hash key
+				totalJobHashes++
+			}
+
+			cursor = nextCursor
+			if cursor == 0 {
+				break
+			}
+		}
+
+		// Calculate orphaned jobs (job hashes not in any state list)
+		orphanedCount := totalJobHashes - int64(len(jobIDsInQueues))
+		if orphanedCount < 0 {
+			orphanedCount = 0
+		}
 
 		stat := QueueStats{
 			Name:      q,
@@ -117,6 +199,9 @@ func (e *Explorer) GetQueueStats(ctx context.Context, queues []string) ([]QueueS
 			Failed:    failedCard,
 			Completed: completedCard,
 			Delayed:   delayedCard,
+			Stalled:   stalledCard,
+			Orphaned:  orphanedCount,
+			Total:     waitLen + activeLen + failedCard + completedCard + delayedCard + stalledCard + orphanedCount,
 		}
 		stats = append(stats, stat)
 
@@ -126,6 +211,8 @@ func (e *Explorer) GetQueueStats(ctx context.Context, queues []string) ([]QueueS
 		metrics.QueueFailed.WithLabelValues(q).Set(float64(stat.Failed))
 		metrics.QueueCompleted.WithLabelValues(q).Set(float64(stat.Completed))
 		metrics.QueueDelayed.WithLabelValues(q).Set(float64(stat.Delayed))
+		metrics.QueueStalled.WithLabelValues(q).Set(float64(stat.Stalled))
+		metrics.QueueOrphaned.WithLabelValues(q).Set(float64(stat.Orphaned))
 	}
 
 	// Ensure we never return nil slice, return empty slice instead

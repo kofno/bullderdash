@@ -28,7 +28,7 @@ bun install
 bun run index.ts
 ```
 
-This will create BullMQ jobs in Valkey that you can monitor.
+This simulator continuously creates BullMQ jobs in Valkey that you can monitor. Jobs take 2-5 seconds to process, with realistic failure rates (10-35%).
 
 ### Step 3: Run Bull-der-dash
 
@@ -175,7 +175,7 @@ kubectl logs -l app=bull-der-dash -f
 
 Check these files:
 - `README.md` - Full documentation
-- `IMPLEMENTATION_NOTES.md` - Technical details
+- `DOCS.md` - Complete feature guide
 - `.env.example` - Configuration examples
 
 Happy monitoring! 🎉

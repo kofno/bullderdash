@@ -66,7 +66,7 @@ DashboardHandler (web/handlers.go)
    ▼
 Explorer (explorer/explorer.go)
    │ Redis SCAN for bull:*:id
-   │ Redis Pipeline (LLEN, SCARD, ZCARD)
+   │ Redis commands (LLEN, SCARD, ZCARD)
    │ Updates Prometheus metrics
    ▼
 HTML Table Response
@@ -152,11 +152,11 @@ bull:webhook:id               • Extract queue names
 Redis Commands:                Explorer:                    Metrics:
 LLEN bull:email:wait    ─┐
 LLEN bull:email:active   │    GetQueueStats()
-SCARD bull:email:failed  ├─>  • Pipeline all commands    ─> QueueWaiting.Set()
-SCARD bull:email:completed│    • Parse results              QueueActive.Set()
-ZCARD bull:email:delayed ─┘    • Update metrics             QueueFailed.Set()
-                               • Return QueueStats[]         QueueCompleted.Set()
-                                                            QueueDelayed.Set()
+SCARD bull:email:failed  ├─>  • Execute commands          ─> QueueWaiting.Set()
+SCARD bull:email:completed│    (individual)                  QueueActive.Set()
+ZCARD bull:email:delayed ─┘    • Parse results               QueueFailed.Set()
+                               • Update metrics               QueueCompleted.Set()
+                               • Return QueueStats[]          QueueDelayed.Set()
 ```
 
 ### Job Retrieval

@@ -218,6 +218,82 @@ func main() {
 			failed, _ := client.SCard(ctx, fmt.Sprintf("%s:%s:failed", prefix, queueName)).Result()
 			completed, _ := client.SCard(ctx, fmt.Sprintf("%s:%s:completed", prefix, queueName)).Result()
 			delayed, _ := client.ZCard(ctx, fmt.Sprintf("%s:%s:delayed", prefix, queueName)).Result()
+			stalled, _ := client.ZCard(ctx, fmt.Sprintf("%s:%s:stalled", prefix, queueName)).Result()
+
+			// Count total job hashes and calculate orphaned
+			var totalJobHashes int64
+			cursor := uint64(0)
+			jobIDsInQueues := make(map[string]bool)
+			queuePrefix := fmt.Sprintf("%s:%s", prefix, queueName)
+
+			// Collect all job IDs in state lists
+			if waitIDs, err := client.LRange(ctx, queuePrefix+":wait", 0, -1).Result(); err == nil {
+				for _, id := range waitIDs {
+					jobIDsInQueues[id] = true
+				}
+			}
+			if activeIDs, err := client.LRange(ctx, queuePrefix+":active", 0, -1).Result(); err == nil {
+				for _, id := range activeIDs {
+					jobIDsInQueues[id] = true
+				}
+			}
+			if failedIDs, err := client.SMembers(ctx, queuePrefix+":failed").Result(); err == nil {
+				for _, id := range failedIDs {
+					jobIDsInQueues[id] = true
+				}
+			}
+			if completedIDs, err := client.SMembers(ctx, queuePrefix+":completed").Result(); err == nil {
+				for _, id := range completedIDs {
+					jobIDsInQueues[id] = true
+				}
+			}
+			if delayedResults, err := client.ZRangeWithScores(ctx, queuePrefix+":delayed", 0, -1).Result(); err == nil {
+				for _, z := range delayedResults {
+					if id, ok := z.Member.(string); ok {
+						jobIDsInQueues[id] = true
+					}
+				}
+			}
+			if stalledResults, err := client.ZRangeWithScores(ctx, queuePrefix+":stalled", 0, -1).Result(); err == nil {
+				for _, z := range stalledResults {
+					if id, ok := z.Member.(string); ok {
+						jobIDsInQueues[id] = true
+					}
+				}
+			}
+
+			// Scan for all job hash keys
+			for {
+				keys, nextCursor, err := client.Scan(ctx, cursor, queuePrefix+":*", 100).Result()
+				if err != nil {
+					break
+				}
+
+				for _, key := range keys {
+					suffix := strings.TrimPrefix(key, queuePrefix+":")
+
+					// Skip metadata keys
+					if suffix == "id" || suffix == "meta" || suffix == "events" ||
+						suffix == "wait" || suffix == "active" || suffix == "failed" ||
+						suffix == "completed" || suffix == "delayed" || suffix == "stalled" ||
+						suffix == "paused" || suffix == "priority" {
+						continue
+					}
+
+					totalJobHashes++
+				}
+
+				cursor = nextCursor
+				if cursor == 0 {
+					break
+				}
+			}
+
+			orphaned := totalJobHashes - int64(len(jobIDsInQueues))
+			if orphaned < 0 {
+				orphaned = 0
+			}
+			total := waiting + active + failed + completed + delayed + stalled + orphaned
 
 			fmt.Printf("✅ Queue Stats for '%s':\n", queueName)
 			fmt.Printf("  🕐 Waiting:   %d\n", waiting)
@@ -225,6 +301,9 @@ func main() {
 			fmt.Printf("  ✅ Completed: %d\n", completed)
 			fmt.Printf("  ❌ Failed:    %d\n", failed)
 			fmt.Printf("  ⏰ Delayed:   %d\n", delayed)
+			fmt.Printf("  🔒 Stalled:   %d\n", stalled)
+			fmt.Printf("  👻 Orphaned:  %d\n", orphaned)
+			fmt.Printf("  📊 Total:     %d\n", total)
 
 		case "QUIT", "EXIT":
 			fmt.Println("Goodbye!")

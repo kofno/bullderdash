@@ -47,6 +47,22 @@ var (
 		[]string{"queue"},
 	)
 
+	QueueStalled = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "bullmq_queue_stalled_total",
+			Help: "Number of stalled jobs in queue",
+		},
+		[]string{"queue"},
+	)
+
+	QueueOrphaned = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "bullmq_queue_orphaned_total",
+			Help: "Number of orphaned job hashes not in any state list",
+		},
+		[]string{"queue"},
+	)
+
 	// HTTP metrics
 	HTTPRequestDuration = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{

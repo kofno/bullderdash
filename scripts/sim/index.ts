@@ -4,59 +4,106 @@ import { Queue, Worker } from 'bullmq';
 const connection = { host: '127.0.0.1', port: 6379 };
 const queueNames = (process.env.QUEUES || 'orders,emails,billing').split(',');
 
-// Configuration for different job types with different outcomes
+// Enhanced job type configurations with more realistic patterns
 const jobTypes = [
-  { name: 'process-data', failRate: 0.1, delayMs: 1000 },      // 90% success rate
-  { name: 'send-email', failRate: 0.2, delayMs: 500 },          // 80% success rate
-  { name: 'webhook-call', failRate: 0.3, delayMs: 800 },        // 70% success rate
-  { name: 'database-sync', failRate: 0.05, delayMs: 2000 },     // 95% success rate
+  {
+    name: 'process-data',
+    failRate: 0.15,        // 15% failure rate
+    delayMs: 3000,         // Takes 3 seconds to process
+    description: 'Data processing job'
+  },
+  {
+    name: 'send-email',
+    failRate: 0.25,        // 25% failure rate (emails are flaky!)
+    delayMs: 2000,         // Takes 2 seconds
+    description: 'Email delivery'
+  },
+  {
+    name: 'webhook-call',
+    failRate: 0.35,        // 35% failure rate (external APIs!)
+    delayMs: 4000,         // Takes 4 seconds
+    description: 'Webhook notification'
+  },
+  {
+    name: 'database-sync',
+    failRate: 0.10,        // 10% failure rate
+    delayMs: 2500,         // Takes 2.5 seconds
+    description: 'Database synchronization'
+  },
+  {
+    name: 'report-generate',
+    failRate: 0.20,        // 20% failure rate
+    delayMs: 5000,         // Takes 5 seconds (longer process)
+    description: 'Generate report'
+  },
 ];
 
 // Create workers for each queue to process jobs through states
 async function setupWorkers() {
   for (const queueName of queueNames) {
-    // Each queue gets a worker that simulates processing
+    // Each queue gets a worker with LOW concurrency to create backlog
     const worker = new Worker(
       queueName,
       async (job) => {
-        const jobType = jobTypes[Math.floor(Math.random() * jobTypes.length)];
+        const jobType = jobTypes[Math.floor(Math.random() * jobTypes.length)]!;
 
-        // Simulate processing time
-        await new Promise(resolve => setTimeout(resolve, jobType.delayMs));
+        console.log(`  ⏳ [${queueName}] Processing job ${job.id} (${jobType.name}) - ${jobType.description}`);
 
-        // Update progress
-        job.updateProgress(50);
-        await new Promise(resolve => setTimeout(resolve, 100));
+        // Simulate processing time with progress updates
+        const steps = 5;
+        const stepDuration = jobType.delayMs / steps;
+
+        for (let i = 1; i <= steps; i++) {
+          await new Promise(resolve => setTimeout(resolve, stepDuration));
+          const progress = (i / steps) * 100;
+          job.updateProgress(progress);
+        }
 
         // Randomly fail some jobs (for testing failure states)
         if (Math.random() < jobType.failRate) {
-          job.updateProgress(75);
-          throw new Error(`Simulated failure in ${job.name}: ${['Network timeout', 'Invalid data', 'Resource not found'][Math.floor(Math.random() * 3)]}`);
+          const errors = [
+            'Network timeout',
+            'Invalid data format',
+            'Resource not found',
+            'Permission denied',
+            'Service unavailable',
+            'Database connection lost',
+          ];
+          const error = errors[Math.floor(Math.random() * errors.length)];
+          console.log(`  ❌ [${queueName}] Job ${job.id} failed: ${error}`);
+          throw new Error(`${jobType.name} failed: ${error}`);
         }
 
-        job.updateProgress(100);
+        console.log(`  ✅ [${queueName}] Job ${job.id} (${jobType.name}) completed`);
         return {
           success: true,
           processedAt: new Date().toISOString(),
           jobName: job.name,
-          queueName: queueName
+          queueName: queueName,
+          processingTime: jobType.delayMs
         };
       },
       {
         connection,
-        concurrency: 3,  // Process up to 3 jobs concurrently
+        concurrency: 1,  // Process only 1 job at a time to create visible queue
+        // Enable auto-removal to clean up completed jobs after a delay
+        autorun: true,
       }
     );
 
-    worker.on('completed', (job, result) => {
-      console.log(`  ✅ [${queueName}] Job ${job.id} (${job.name}) completed`);
+    worker.on('completed', (job, _result) => {
+      console.log(`  ✅ [${queueName}] Job ${job?.id} completed successfully`);
     });
 
     worker.on('failed', (job, err) => {
-      console.log(`  ❌ [${queueName}] Job ${job.id} (${job.name}) failed: ${err.message}`);
+      console.log(`  ❌ [${queueName}] Job ${job?.id} failed after ${job?.attemptsMade} attempt(s): ${err.message}`);
     });
 
-    console.log(`🔧 Worker started for queue: ${queueName}`);
+    worker.on('error', (err) => {
+      console.error(`  💥 [${queueName}] Worker error:`, err.message);
+    });
+
+    console.log(`🔧 Worker started for queue: ${queueName} (concurrency: 1 - creates visible backlog)`);
   }
 }
 
@@ -68,59 +115,100 @@ async function addJobsContinuously() {
     queues.set(queueName, new Queue(queueName, { connection }));
   }
 
-  // Add jobs every 2-4 seconds
+  // Add jobs with variable timing to create realistic patterns
   const addJobs = async () => {
     for (const [queueName, queue] of queues) {
-      const jobType = jobTypes[Math.floor(Math.random() * jobTypes.length)];
+      // Randomly choose 1-3 jobs to add each cycle
+      const jobsToAdd = Math.floor(Math.random() * 3) + 1;
 
-      // Randomly add delayed jobs (20% chance)
-      const delay = Math.random() < 0.2 ? Math.random() * 10000 : 0;
+      for (let i = 0; i < jobsToAdd; i++) {
+        const jobType = jobTypes[Math.floor(Math.random() * jobTypes.length)]!;
 
-      // Add some jobs with retry options to see them move through states
-      const opts: any = {
-        attempts: 3,
-        backoff: {
-          type: 'exponential',
-          delay: 2000,
-        },
-      };
+        // More realistic delay distribution:
+        // - 60% no delay (immediate)
+        // - 30% short delay (5-15 seconds)
+        // - 10% longer delay (30-60 seconds)
+        let delay = 0;
+        const delayRoll = Math.random();
+        if (delayRoll < 0.60) {
+          delay = 0;  // Execute immediately
+        } else if (delayRoll < 0.90) {
+          delay = 5000 + Math.random() * 10000;  // 5-15 seconds
+        } else {
+          delay = 30000 + Math.random() * 30000;  // 30-60 seconds
+        }
 
-      if (delay > 0) {
-        opts.delay = delay;
-      }
-
-      try {
-        const job = await queue.add(
-          jobType.name,
-          {
-            id: Math.random().toString(36).substring(7),
-            timestamp: Date.now(),
-            data: {
-              value: Math.floor(Math.random() * 1000),
-              user: `user-${Math.floor(Math.random() * 100)}`,
-            },
+        const opts: any = {
+          attempts: 3,  // Allow 3 attempts before giving up
+          backoff: {
+            type: 'exponential',
+            delay: 3000,  // 3 second base delay between retries
           },
-          opts
-        );
-        console.log(`📤 [${queueName}] Added job ${job.id} (${jobType.name})${delay > 0 ? ` (delayed ${(delay / 1000).toFixed(1)}s)` : ''}`);
-      } catch (err) {
-        console.error(`Failed to add job to ${queueName}:`, err);
+          removeOnComplete: {
+            age: 60 * 60,  // Keep completed jobs for 1 hour
+          },
+          removeOnFail: {
+            age: 24 * 60 * 60,  // Keep failed jobs for 24 hours
+          },
+        };
+
+        if (delay > 0) {
+          opts.delay = delay;
+        }
+
+        try {
+          const job = await queue.add(
+            jobType.name,
+            {
+              id: Math.random().toString(36).substring(7),
+              timestamp: Date.now(),
+              data: {
+                value: Math.floor(Math.random() * 1000),
+                user: `user-${Math.floor(Math.random() * 100)}`,
+                operation: jobType.description,
+              },
+            },
+            opts
+          );
+
+          const delayStr = delay > 0 ? ` (delayed ${(delay / 1000).toFixed(1)}s)` : '';
+          console.log(`📤 [${queueName}] Added job ${job.id} (${jobType.name})${delayStr}`);
+        } catch (err) {
+          console.error(`Failed to add job to ${queueName}:`, err);
+        }
       }
     }
   };
 
-  // Initial jobs
+  // Initial batch of jobs
+  console.log("\n📊 Adding initial batch of jobs...");
   await addJobs();
 
-  // Keep adding jobs continuously
-  setInterval(addJobs, 2000 + Math.random() * 2000);
+  // Add jobs every 8-12 seconds to keep a visible queue
+  // (since each job takes 2-5 seconds and we process 1 at a time,
+  // the queue will fill up and drain, creating realistic workflow)
+  console.log("📤 Continuing to add jobs every 8-12 seconds...\n");
+  setInterval(addJobs, 8000 + Math.random() * 4000);
 }
 
 async function simulate() {
-  console.log("🎢 Starting Bull-der-dash Enhanced Job Simulator...");
+  console.log("🎢 Starting Bull-der-dash Realistic Job Simulator...");
   console.log(`📋 Queues: ${queueNames.join(', ')}`);
   console.log(`📊 Job types: ${jobTypes.map(jt => jt.name).join(', ')}`);
-  console.log("");
+  console.log(`\n⚙️  Configuration:`);
+  console.log(`  • Worker concurrency: 1 per queue (creates visible backlog)`);
+  console.log(`  • Job processing time: 2-5 seconds each`);
+  console.log(`  • New jobs added every 8-12 seconds`);
+  console.log(`  • Failure rates: 10-35% (realistic flakiness)`);
+  console.log(`  • Retry attempts: 3 per job`);
+  console.log(`  • Delayed jobs: 60% immediate, 30% 5-15s delay, 10% 30-60s delay`);
+  console.log("\n📈 What you'll see:");
+  console.log(`  ✅ Jobs in WAITING state (backlog building up)`);
+  console.log(`  🚀 Jobs in ACTIVE state (currently processing)`);
+  console.log(`  ❌ Jobs in FAILED state (after 3 retry attempts)`);
+  console.log(`  ✅ Jobs in COMPLETED state (before cleanup)`);
+  console.log(`  ⏰ Jobs in DELAYED state (scheduled for later)`);
+  console.log("\n");
 
   try {
     // Setup workers first
@@ -131,10 +219,10 @@ async function simulate() {
     await addJobsContinuously();
 
     console.log("🚀 Simulator running... Press Ctrl+C to stop\n");
+    console.log("💡 Tip: Run 'QUEUE-STATS orders' in redis-cli to see jobs in different states!");
+    console.log("💡 Tip: Visit http://localhost:8080 to view the dashboard\n");
 
     // Keep the process alive
-    // Job states will flow through: waiting → active → completed/failed
-    // Some will be retried, some will be delayed
   } catch (err) {
     console.error("Simulation error:", err);
     process.exit(1);
@@ -143,7 +231,8 @@ async function simulate() {
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
-  console.log("\n📊 Simulator shutting down gracefully...");
+  console.log("\n\n📊 Simulator shutting down gracefully...");
+  console.log("(Jobs in progress will continue processing)");
   process.exit(0);
 });
 
