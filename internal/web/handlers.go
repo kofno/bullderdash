@@ -375,6 +375,17 @@ func QueueDetailHandler(exp *explorer.Explorer) http.HandlerFunc {
 			Delayed:   delayed,
 		}
 
+		if r.Header.Get("HX-Request") != "" {
+			tmpl := template.Must(template.New("queue-detail").Parse(queueDetailTmpl))
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			if err := tmpl.Execute(w, pageData{Data: data}); err != nil {
+				log.Printf("❌ queue detail fragment render error (queue=%s): %v", queueName, err)
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			return
+		}
+
 		err = renderShell(w, "Bull-der-dash - "+queueName, "Queue: "+queueName, queueDetailTmpl, data)
 		if err != nil {
 			log.Printf("❌ renderShell error (queue=%s): %v", queueName, err)
@@ -385,6 +396,7 @@ func QueueDetailHandler(exp *explorer.Explorer) http.HandlerFunc {
 }
 
 const queueDetailTmpl = `
+<div id="queue-detail" hx-get="/queue/{{.Data.Stat.Name}}" hx-trigger="every 5s" hx-swap="outerHTML">
 <table class="min-w-full divide-y divide-gray-200 mb-8">
     <thead class="bg-gray-50">
         <tr>

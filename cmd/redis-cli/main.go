@@ -238,7 +238,7 @@ func main() {
 }
 
 func showHelp() {
-	fmt.Println(`
+	fmt.Print(`
 Available Commands:
   KEYS <pattern>        - List keys matching pattern (e.g., "bull:*:id")
   GET <key>             - Get string value
