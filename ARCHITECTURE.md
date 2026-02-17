@@ -40,9 +40,13 @@
                     │  • bull:{queue}:id       │
                     │  • bull:{queue}:wait     │
                     │  • bull:{queue}:active   │
+                    │  • bull:{queue}:paused   │
+                    │  • bull:{queue}:prioritized │
+                    │  • bull:{queue}:waiting-children │
                     │  • bull:{queue}:failed   │
                     │  • bull:{queue}:completed│
                     │  • bull:{queue}:delayed  │
+                    │  • bull:{queue}:stalled  │
                     │  • bull:{queue}:{jobId}  │
                     └──────────────────────────┘
 ```
@@ -66,7 +70,7 @@ DashboardHandler (web/handlers.go)
    ▼
 Explorer (explorer/explorer.go)
    │ Redis SCAN for bull:*:id
-   │ Redis commands (LLEN, SCARD, ZCARD)
+   │ Redis commands (LLEN, ZCARD)
    │ Updates Prometheus metrics
    ▼
 HTML Table Response
@@ -85,7 +89,7 @@ JobListHandler (web/handlers.go)
    │ Calls explorer.GetJobsByState()
    ▼
 Explorer (explorer/explorer.go)
-   │ Redis SMEMBERS bull:email:failed
+   │ Redis ZRANGE bull:email:failed
    │ For each jobID:
    │   Redis HGETALL bull:email:{jobId}
    │   Parse JSON fields
@@ -131,6 +135,7 @@ Text Response (Prometheus format)
    │ bullmq_queue_waiting_total{queue="email"} 42
    │ bullmq_queue_active_total{queue="email"} 5
    │ http_request_duration_seconds_bucket{...} 145
+   │ (HTTP path labels are normalized to stable routes)
    │ redis_operation_duration_seconds_bucket{...} 89
    ▼
 Prometheus stores & graphs
@@ -149,14 +154,17 @@ bull:webhook:id               • Extract queue names
 
 ### Queue Statistics
 ```
-Redis Commands:                Explorer:                    Metrics:
-LLEN bull:email:wait    ─┐
-LLEN bull:email:active   │    GetQueueStats()
-SCARD bull:email:failed  ├─>  • Execute commands          ─> QueueWaiting.Set()
-SCARD bull:email:completed│    (individual)                  QueueActive.Set()
-ZCARD bull:email:delayed ─┘    • Parse results               QueueFailed.Set()
-                               • Update metrics               QueueCompleted.Set()
-                               • Return QueueStats[]          QueueDelayed.Set()
+Redis Commands:                    Explorer:                    Metrics:
+LLEN bull:email:wait       ─┐
+LLEN bull:email:active      │
+LLEN bull:email:paused      │
+ZCARD bull:email:prioritized│    GetQueueStats()
+LLEN bull:email:waiting-children│
+ZCARD bull:email:failed     ├─>  • Execute commands          ─> QueueWaiting.Set()
+ZCARD bull:email:completed  │    (individual)                  QueueActive.Set()
+ZCARD bull:email:delayed    │    • Parse results               QueueFailed.Set()
+ZCARD bull:email:stalled   ─┘    • Update metrics               QueueCompleted.Set()
+                                   • Return QueueStats[]        QueueDelayed.Set()
 ```
 
 ### Job Retrieval
@@ -247,7 +255,7 @@ Bull-der-dash is **completely stateless**:
 | Operation | Latency | Notes |
 |-----------|---------|-------|
 | Queue discovery | ~10-20ms | SCAN command, cached in Redis |
-| Queue stats | ~5-10ms | Pipelined commands |
+| Queue stats | ~5-10ms | Multiple Redis commands |
 | Job retrieval | ~2-5ms | Single HGETALL |
 | Job list (100) | ~50-100ms | Multiple HGETALL calls |
 | Metrics export | ~1-2ms | In-memory registry |
@@ -284,7 +292,4 @@ Bull-der-dash is **completely stateless**:
 2. **Job list size** - Paginate for large queues (TODO)
 3. **Metrics cardinality** - Queue name is only label (safe)
 
----
-
-This architecture provides a solid foundation for building out the features you have planned!
 

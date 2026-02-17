@@ -215,8 +215,11 @@ func main() {
 
 			waiting, _ := client.LLen(ctx, fmt.Sprintf("%s:%s:wait", prefix, queueName)).Result()
 			active, _ := client.LLen(ctx, fmt.Sprintf("%s:%s:active", prefix, queueName)).Result()
-			failed, _ := client.SCard(ctx, fmt.Sprintf("%s:%s:failed", prefix, queueName)).Result()
-			completed, _ := client.SCard(ctx, fmt.Sprintf("%s:%s:completed", prefix, queueName)).Result()
+			paused, _ := client.LLen(ctx, fmt.Sprintf("%s:%s:paused", prefix, queueName)).Result()
+			prioritized, _ := client.ZCard(ctx, fmt.Sprintf("%s:%s:prioritized", prefix, queueName)).Result()
+			waitingChildren, _ := client.ZCard(ctx, fmt.Sprintf("%s:%s:waiting-children", prefix, queueName)).Result()
+			failed, _ := client.ZCard(ctx, fmt.Sprintf("%s:%s:failed", prefix, queueName)).Result()
+			completed, _ := client.ZCard(ctx, fmt.Sprintf("%s:%s:completed", prefix, queueName)).Result()
 			delayed, _ := client.ZCard(ctx, fmt.Sprintf("%s:%s:delayed", prefix, queueName)).Result()
 			stalled, _ := client.ZCard(ctx, fmt.Sprintf("%s:%s:stalled", prefix, queueName)).Result()
 
@@ -237,12 +240,27 @@ func main() {
 					jobIDsInQueues[id] = true
 				}
 			}
-			if failedIDs, err := client.SMembers(ctx, queuePrefix+":failed").Result(); err == nil {
+			if pausedIDs, err := client.LRange(ctx, queuePrefix+":paused", 0, -1).Result(); err == nil {
+				for _, id := range pausedIDs {
+					jobIDsInQueues[id] = true
+				}
+			}
+			if prioritizedIDs, err := client.ZRange(ctx, queuePrefix+":prioritized", 0, -1).Result(); err == nil {
+				for _, id := range prioritizedIDs {
+					jobIDsInQueues[id] = true
+				}
+			}
+			if waitingChildrenIDs, err := client.ZRange(ctx, queuePrefix+":waiting-children", 0, -1).Result(); err == nil {
+				for _, id := range waitingChildrenIDs {
+					jobIDsInQueues[id] = true
+				}
+			}
+			if failedIDs, err := client.ZRange(ctx, queuePrefix+":failed", 0, -1).Result(); err == nil {
 				for _, id := range failedIDs {
 					jobIDsInQueues[id] = true
 				}
 			}
-			if completedIDs, err := client.SMembers(ctx, queuePrefix+":completed").Result(); err == nil {
+			if completedIDs, err := client.ZRange(ctx, queuePrefix+":completed", 0, -1).Result(); err == nil {
 				for _, id := range completedIDs {
 					jobIDsInQueues[id] = true
 				}
@@ -276,7 +294,17 @@ func main() {
 					if suffix == "id" || suffix == "meta" || suffix == "events" ||
 						suffix == "wait" || suffix == "active" || suffix == "failed" ||
 						suffix == "completed" || suffix == "delayed" || suffix == "stalled" ||
-						suffix == "paused" || suffix == "priority" {
+						suffix == "paused" || suffix == "priority" || suffix == "prioritized" ||
+						suffix == "waiting-children" {
+						continue
+					}
+
+					keyType, err := client.Type(ctx, key).Result()
+					if err != nil || keyType != "hash" {
+						continue
+					}
+					isJobHash, err := client.HExists(ctx, key, "name").Result()
+					if err != nil || !isJobHash {
 						continue
 					}
 
@@ -293,11 +321,14 @@ func main() {
 			if orphaned < 0 {
 				orphaned = 0
 			}
-			total := waiting + active + failed + completed + delayed + stalled + orphaned
+			total := waiting + active + paused + prioritized + waitingChildren + failed + completed + delayed + stalled + orphaned
 
 			fmt.Printf("✅ Queue Stats for '%s':\n", queueName)
 			fmt.Printf("  🕐 Waiting:   %d\n", waiting)
 			fmt.Printf("  🚀 Active:    %d\n", active)
+			fmt.Printf("  ⏸️  Paused:    %d\n", paused)
+			fmt.Printf("  ⭐ Prioritized: %d\n", prioritized)
+			fmt.Printf("  👶 Waiting-Children: %d\n", waitingChildren)
 			fmt.Printf("  ✅ Completed: %d\n", completed)
 			fmt.Printf("  ❌ Failed:    %d\n", failed)
 			fmt.Printf("  ⏰ Delayed:   %d\n", delayed)

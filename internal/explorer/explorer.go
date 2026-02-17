@@ -55,15 +55,18 @@ func (e *Explorer) DiscoverQueues(ctx context.Context, prefix string) ([]string,
 }
 
 type QueueStats struct {
-	Name      string
-	Wait      int64
-	Active    int64
-	Failed    int64
-	Completed int64
-	Delayed   int64
-	Stalled   int64
-	Orphaned  int64
-	Total     int64
+	Name            string
+	Wait            int64
+	Active          int64
+	Paused          int64
+	Prioritized     int64
+	WaitingChildren int64
+	Failed          int64
+	Completed       int64
+	Delayed         int64
+	Stalled         int64
+	Orphaned        int64
+	Total           int64
 }
 
 // Job represents a BullMQ job
@@ -110,9 +113,12 @@ func (e *Explorer) GetQueueStats(ctx context.Context, queues []string) ([]QueueS
 		// Use individual commands instead of pipeline to handle per-queue errors
 		waitLen, _ := e.client.LLen(ctx, prefix+":wait").Result()
 		activeLen, _ := e.client.LLen(ctx, prefix+":active").Result()
+		pausedLen, _ := e.client.LLen(ctx, prefix+":paused").Result()
+		prioritizedLen, _ := e.client.ZCard(ctx, prefix+":prioritized").Result()
+		waitingChildrenLen, _ := e.client.ZCard(ctx, prefix+":waiting-children").Result()
 
-		failedCard, _ := e.client.SCard(ctx, prefix+":failed").Result()
-		completedCard, _ := e.client.SCard(ctx, prefix+":completed").Result()
+		failedCard, _ := e.client.ZCard(ctx, prefix+":failed").Result()
+		completedCard, _ := e.client.ZCard(ctx, prefix+":completed").Result()
 		delayedCard, _ := e.client.ZCard(ctx, prefix+":delayed").Result()
 		stalledCard, _ := e.client.ZCard(ctx, prefix+":stalled").Result()
 
@@ -132,12 +138,27 @@ func (e *Explorer) GetQueueStats(ctx context.Context, queues []string) ([]QueueS
 				jobIDsInQueues[id] = true
 			}
 		}
-		if failedIDs, err := e.client.SMembers(ctx, prefix+":failed").Result(); err == nil {
+		if pausedIDs, err := e.client.LRange(ctx, prefix+":paused", 0, -1).Result(); err == nil {
+			for _, id := range pausedIDs {
+				jobIDsInQueues[id] = true
+			}
+		}
+		if prioritizedIDs, err := e.client.ZRange(ctx, prefix+":prioritized", 0, -1).Result(); err == nil {
+			for _, id := range prioritizedIDs {
+				jobIDsInQueues[id] = true
+			}
+		}
+		if waitingChildrenIDs, err := e.client.ZRange(ctx, prefix+":waiting-children", 0, -1).Result(); err == nil {
+			for _, id := range waitingChildrenIDs {
+				jobIDsInQueues[id] = true
+			}
+		}
+		if failedIDs, err := e.client.ZRange(ctx, prefix+":failed", 0, -1).Result(); err == nil {
 			for _, id := range failedIDs {
 				jobIDsInQueues[id] = true
 			}
 		}
-		if completedIDs, err := e.client.SMembers(ctx, prefix+":completed").Result(); err == nil {
+		if completedIDs, err := e.client.ZRange(ctx, prefix+":completed", 0, -1).Result(); err == nil {
 			for _, id := range completedIDs {
 				jobIDsInQueues[id] = true
 			}
@@ -157,7 +178,7 @@ func (e *Explorer) GetQueueStats(ctx context.Context, queues []string) ([]QueueS
 			}
 		}
 
-		// Now scan for all job hash keys (excluding metadata keys like :id, :meta, :events, :active, etc.)
+		// Now scan for all job hash keys (exclude metadata keys and ensure hash has "name")
 		for {
 			keys, nextCursor, err := e.client.Scan(ctx, cursor, prefix+":*", 100).Result()
 			if err != nil {
@@ -172,11 +193,20 @@ func (e *Explorer) GetQueueStats(ctx context.Context, queues []string) ([]QueueS
 				if suffix == "id" || suffix == "meta" || suffix == "events" ||
 					suffix == "wait" || suffix == "active" || suffix == "failed" ||
 					suffix == "completed" || suffix == "delayed" || suffix == "stalled" ||
-					suffix == "paused" || suffix == "priority" {
+					suffix == "paused" || suffix == "priority" || suffix == "prioritized" ||
+					suffix == "waiting-children" {
 					continue
 				}
 
-				// This is a job hash key
+				keyType, err := e.client.Type(ctx, key).Result()
+				if err != nil || keyType != "hash" {
+					continue
+				}
+				isJobHash, err := e.client.HExists(ctx, key, "name").Result()
+				if err != nil || !isJobHash {
+					continue
+				}
+
 				totalJobHashes++
 			}
 
@@ -193,21 +223,27 @@ func (e *Explorer) GetQueueStats(ctx context.Context, queues []string) ([]QueueS
 		}
 
 		stat := QueueStats{
-			Name:      q,
-			Wait:      waitLen,
-			Active:    activeLen,
-			Failed:    failedCard,
-			Completed: completedCard,
-			Delayed:   delayedCard,
-			Stalled:   stalledCard,
-			Orphaned:  orphanedCount,
-			Total:     waitLen + activeLen + failedCard + completedCard + delayedCard + stalledCard + orphanedCount,
+			Name:            q,
+			Wait:            waitLen,
+			Active:          activeLen,
+			Paused:          pausedLen,
+			Prioritized:     prioritizedLen,
+			WaitingChildren: waitingChildrenLen,
+			Failed:          failedCard,
+			Completed:       completedCard,
+			Delayed:         delayedCard,
+			Stalled:         stalledCard,
+			Orphaned:        orphanedCount,
+			Total:           waitLen + activeLen + pausedLen + prioritizedLen + waitingChildrenLen + failedCard + completedCard + delayedCard + stalledCard + orphanedCount,
 		}
 		stats = append(stats, stat)
 
 		// Update Prometheus metrics
 		metrics.QueueWaiting.WithLabelValues(q).Set(float64(stat.Wait))
 		metrics.QueueActive.WithLabelValues(q).Set(float64(stat.Active))
+		metrics.QueuePaused.WithLabelValues(q).Set(float64(stat.Paused))
+		metrics.QueuePrioritized.WithLabelValues(q).Set(float64(stat.Prioritized))
+		metrics.QueueWaitingChildren.WithLabelValues(q).Set(float64(stat.WaitingChildren))
 		metrics.QueueFailed.WithLabelValues(q).Set(float64(stat.Failed))
 		metrics.QueueCompleted.WithLabelValues(q).Set(float64(stat.Completed))
 		metrics.QueueDelayed.WithLabelValues(q).Set(float64(stat.Delayed))
@@ -327,13 +363,28 @@ func (e *Explorer) determineJobState(ctx context.Context, queueName, jobID strin
 		return "waiting"
 	}
 
+	// Check paused list
+	if _, err := e.client.LPos(ctx, prefix+":paused", jobID, redis.LPosArgs{}).Result(); err == nil {
+		return "paused"
+	}
+
+	// Check prioritized zset
+	if _, err := e.client.ZScore(ctx, prefix+":prioritized", jobID).Result(); err == nil {
+		return "prioritized"
+	}
+
+	// Check waiting-children zset
+	if _, err := e.client.ZScore(ctx, prefix+":waiting-children", jobID).Result(); err == nil {
+		return "waiting-children"
+	}
+
 	// Check failed set
-	if isMember, err := e.client.SIsMember(ctx, prefix+":failed", jobID).Result(); err == nil && isMember {
+	if _, err := e.client.ZScore(ctx, prefix+":failed", jobID).Result(); err == nil {
 		return "failed"
 	}
 
 	// Check completed set
-	if isMember, err := e.client.SIsMember(ctx, prefix+":completed", jobID).Result(); err == nil && isMember {
+	if _, err := e.client.ZScore(ctx, prefix+":completed", jobID).Result(); err == nil {
 		return "completed"
 	}
 
@@ -361,16 +412,16 @@ func (e *Explorer) GetJobsByState(ctx context.Context, queueName, state string, 
 		jobIDs, err = e.client.LRange(ctx, prefix+":wait", 0, int64(limit-1)).Result()
 	case "active":
 		jobIDs, err = e.client.LRange(ctx, prefix+":active", 0, int64(limit-1)).Result()
+	case "paused":
+		jobIDs, err = e.client.LRange(ctx, prefix+":paused", 0, int64(limit-1)).Result()
+	case "prioritized":
+		jobIDs, err = e.client.ZRange(ctx, prefix+":prioritized", 0, int64(limit-1)).Result()
+	case "waiting-children":
+		jobIDs, err = e.client.ZRange(ctx, prefix+":waiting-children", 0, int64(limit-1)).Result()
 	case "failed":
-		jobIDs, err = e.client.SMembers(ctx, prefix+":failed").Result()
-		if len(jobIDs) > limit {
-			jobIDs = jobIDs[:limit]
-		}
+		jobIDs, err = e.client.ZRange(ctx, prefix+":failed", 0, int64(limit-1)).Result()
 	case "completed":
-		jobIDs, err = e.client.SMembers(ctx, prefix+":completed").Result()
-		if len(jobIDs) > limit {
-			jobIDs = jobIDs[:limit]
-		}
+		jobIDs, err = e.client.ZRange(ctx, prefix+":completed", 0, int64(limit-1)).Result()
 	case "delayed":
 		// For delayed jobs, we get them from the sorted set
 		results, err := e.client.ZRangeWithScores(ctx, prefix+":delayed", 0, int64(limit-1)).Result()

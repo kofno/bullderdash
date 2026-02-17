@@ -2,25 +2,76 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/kofno/bullderdash/internal/config"
 	"github.com/kofno/bullderdash/internal/explorer"
+	"github.com/kofno/bullderdash/internal/metrics"
 	"github.com/kofno/bullderdash/internal/web"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 )
 
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func withHTTPMetrics(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		if path, ok := normalizePath(r.URL.Path); ok {
+			metrics.HTTPRequestDuration.WithLabelValues(
+				r.Method,
+				path,
+				fmt.Sprintf("%d", rec.status),
+			).Observe(time.Since(start).Seconds())
+		}
+	})
+}
+
+func normalizePath(path string) (string, bool) {
+	switch {
+	case path == "/":
+		return "/", true
+	case path == "/queues":
+		return "/queues", true
+	case path == "/queue/jobs":
+		return "/queue/jobs", true
+	case strings.HasPrefix(path, "/queue/"):
+		return "/queue/:name", true
+	case path == "/job/detail":
+		return "/job/detail", true
+	case path == "/metrics":
+		return "/metrics", true
+	case path == "/health" || path == "/healthz":
+		return "/health", true
+	case path == "/ready" || path == "/readyz":
+		return "/ready", true
+	default:
+		return "", false
+	}
+}
+
 func main() {
 	// 1. Load configuration
 	cfg := config.Load()
-	log.Printf("🔧 Starting Bull-der-dash with config: Redis=%s, Port=%s, Prefix=%s",
-		cfg.RedisAddr, cfg.ServerPort, cfg.QueuePrefix)
+	log.Printf("🔧 Starting Bull-der-dash with config: Redis=%s, Port=%s, Prefix=%s, MetricsPoll=%ds",
+		cfg.RedisAddr, cfg.ServerPort, cfg.QueuePrefix, cfg.MetricsPollSeconds)
 
 	// 2. Setup Redis/Valkey client
 	rdb := redis.NewClient(&redis.Options{
@@ -65,10 +116,36 @@ func main() {
 	// Prometheus metrics
 	mux.Handle("/metrics", promhttp.Handler())
 
+	// Background queue stats poller for metrics freshness
+	stopMetrics := make(chan struct{})
+	go func() {
+		pollSeconds := cfg.MetricsPollSeconds
+		if pollSeconds < 1 {
+			pollSeconds = 1
+		}
+		ticker := time.NewTicker(time.Duration(pollSeconds) * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				queues, err := exp.DiscoverQueues(context.Background(), cfg.QueuePrefix)
+				if err != nil {
+					log.Printf("⚠️ DiscoverQueues (metrics poller) error: %v", err)
+					continue
+				}
+				if _, err := exp.GetQueueStats(context.Background(), queues); err != nil {
+					log.Printf("⚠️ GetQueueStats (metrics poller) error: %v", err)
+				}
+			case <-stopMetrics:
+				return
+			}
+		}
+	}()
+
 	// 4. Setup server with graceful shutdown
 	server := &http.Server{
 		Addr:         ":" + cfg.ServerPort,
-		Handler:      mux,
+		Handler:      withHTTPMetrics(mux),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
@@ -91,6 +168,7 @@ func main() {
 	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	close(stopMetrics)
 	if err := server.Shutdown(ctx); err != nil {
 		log.Fatalf("❌ Server forced to shutdown: %v", err)
 	}

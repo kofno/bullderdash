@@ -1,21 +1,24 @@
-# 📚 Which Documentation File?
+# Which Documentation File?
 
 ## Quick Decision Tree
 
 **I want to get started quickly**
-→ `QUICKSTART.md` ⚡
+→ `QUICKSTART.md`
 
 **I want to understand what this project does**
-→ `README.md` 📖
+→ `README.md`
 
 **I want to use it (all features)**
-→ `DOCS.md` 📘
+→ `DOCS.md`
 
 **I want to run commands**
-→ `QUICK_COMMANDS_REFERENCE.md` 💻
+→ `DOCS.md` (Commands section)
 
 **I want to understand the system architecture**
-→ `ARCHITECTURE.md` 🏗️
+→ `ARCHITECTURE.md`
+
+**I want simulator details**
+→ `scripts/sim/README.md`
 
 ---
 
@@ -70,5 +73,5 @@
 
 ## That's It!
 
-Just **6 files**. No confusion. No duplicates. Simple!
+Just a few files. No duplicates. Simple.
 

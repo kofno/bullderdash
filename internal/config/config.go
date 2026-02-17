@@ -7,23 +7,25 @@ import (
 
 // Config holds application configuration
 type Config struct {
-	RedisAddr     string
-	RedisPassword string
-	RedisDB       int
-	ServerPort    string
-	QueuePrefix   string
-	LogLevel      string
+	RedisAddr          string
+	RedisPassword      string
+	RedisDB            int
+	ServerPort         string
+	QueuePrefix        string
+	MetricsPollSeconds int
+	LogLevel           string
 }
 
 // Load reads configuration from environment variables with sensible defaults
 func Load() *Config {
 	return &Config{
-		RedisAddr:     getEnv("REDIS_ADDR", "127.0.0.1:6379"),
-		RedisPassword: getEnv("REDIS_PASSWORD", ""),
-		RedisDB:       getEnvInt("REDIS_DB", 0),
-		ServerPort:    getEnv("SERVER_PORT", "8080"),
-		QueuePrefix:   getEnv("QUEUE_PREFIX", "bull"),
-		LogLevel:      getEnv("LOG_LEVEL", "info"),
+		RedisAddr:          getEnv("REDIS_ADDR", "127.0.0.1:6379"),
+		RedisPassword:      getEnv("REDIS_PASSWORD", ""),
+		RedisDB:            getEnvInt("REDIS_DB", 0),
+		ServerPort:         getEnv("SERVER_PORT", "8080"),
+		QueuePrefix:        getEnv("QUEUE_PREFIX", "bull"),
+		MetricsPollSeconds: getEnvInt("METRICS_POLL_SECONDS", 10),
+		LogLevel:           getEnv("LOG_LEVEL", "info"),
 	}
 }
 

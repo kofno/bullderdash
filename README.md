@@ -1,17 +1,16 @@
-# Bull-der-dash 🐂
+# Bull-der-dash
 
-A high-performance, production-ready dashboard for monitoring BullMQ queues, built in Go for speed, efficiency, and Kubernetes-native deployments.
+A high-performance dashboard for monitoring BullMQ queues, built in Go for speed, efficiency, and Kubernetes-native deployments.
 
 ## Features ✨
 
 ### Current (MVP)
-- **Live Queue Monitoring**: Real-time updates every 5 seconds showing queue statistics
-- **Multi-State Tracking**: Monitor waiting, active, failed, completed, and delayed jobs
-- **Job Introspection**: View detailed information about individual jobs
-- **Job Listing**: Browse jobs by state with pagination
+- **Live Queue Monitoring**: Real-time updates every 5 seconds
+- **Multi-State Tracking**: waiting, active, paused, prioritized, waiting-children, completed, failed, delayed, stalled, orphaned
 - **Queue Detail View**: Single-queue view with jobs grouped by state
-- **Prometheus Metrics**: Built-in `/metrics` endpoint for monitoring and alerting
-- **Health Checks**: K8s-friendly `/health` and `/ready` endpoints
+- **Job Introspection**: JSON detail for any job
+- **Prometheus Metrics**: Built-in `/metrics` endpoint
+- **Health Checks**: `/health` and `/ready`
 - **Environment Configuration**: 12-factor app design with environment variables
 - **Lightweight**: Low memory footprint and fast response times
 - **HTMX-powered UI**: Interactive dashboard without heavy JavaScript frameworks
@@ -43,8 +42,9 @@ bull-der-dash/
 ## Quick Start 🚀
 
 ### Prerequisites
-- Go 1.25+ (or compatible version)
+- Go 1.25.4+
 - Redis/Valkey instance with BullMQ data
+- Bun (for the simulator)
 - (Optional) Kubernetes cluster for deployment
 
 ### Local Development
@@ -103,6 +103,7 @@ All configuration is done via environment variables:
 | `REDIS_DB` | `0` | Redis database number |
 | `SERVER_PORT` | `8080` | HTTP server port |
 | `QUEUE_PREFIX` | `bull` | BullMQ queue prefix in Redis |
+| `METRICS_POLL_SECONDS` | `10` | Background queue stats refresh interval (seconds) |
 | `LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
 
 ## Endpoints 🌐
@@ -164,14 +165,19 @@ task build-all
 Bull-der-dash exposes the following Prometheus metrics:
 
 ### Queue Metrics
-- `bullmq_queue_waiting_total{queue="<name>"}` - Jobs waiting to be processed
-- `bullmq_queue_active_total{queue="<name>"}` - Jobs currently processing
-- `bullmq_queue_failed_total{queue="<name>"}` - Failed jobs
-- `bullmq_queue_completed_total{queue="<name>"}` - Completed jobs
-- `bullmq_queue_delayed_total{queue="<name>"}` - Delayed jobs
+- `bullmq_queue_waiting{queue="<name>"}` - Jobs waiting to be processed
+- `bullmq_queue_active{queue="<name>"}` - Jobs currently processing
+- `bullmq_queue_paused{queue="<name>"}` - Jobs paused
+- `bullmq_queue_prioritized{queue="<name>"}` - Prioritized jobs
+- `bullmq_queue_waiting_children{queue="<name>"}` - Jobs waiting on children
+- `bullmq_queue_failed{queue="<name>"}` - Failed jobs
+- `bullmq_queue_completed{queue="<name>"}` - Completed jobs
+- `bullmq_queue_delayed{queue="<name>"}` - Delayed jobs
+- `bullmq_queue_stalled{queue="<name>"}` - Stalled jobs
+- `bullmq_queue_orphaned{queue="<name>"}` - Orphaned job hashes
 
 ### Performance Metrics
-- `http_request_duration_seconds{method, path, status}` - HTTP request latency
+- `http_request_duration_seconds{method, path, status}` - HTTP request latency (path is normalized to stable routes)
 - `redis_operation_duration_seconds{operation}` - Redis operation latency
 - `redis_operation_errors_total{operation}` - Redis operation errors
 
@@ -260,9 +266,13 @@ BullMQ stores data in Redis with these key patterns:
 - `bull:{queue}:id` - Queue ID counter
 - `bull:{queue}:wait` - List of waiting job IDs
 - `bull:{queue}:active` - List of active job IDs
-- `bull:{queue}:failed` - Set of failed job IDs
-- `bull:{queue}:completed` - Set of completed job IDs
+- `bull:{queue}:paused` - List of paused job IDs
+- `bull:{queue}:prioritized` - Sorted set of prioritized jobs (score = priority)
+- `bull:{queue}:waiting-children` - List of parent jobs waiting on children
+- `bull:{queue}:failed` - Sorted set of failed jobs (score = timestamp)
+- `bull:{queue}:completed` - Sorted set of completed jobs (score = timestamp)
 - `bull:{queue}:delayed` - Sorted set of delayed jobs (score = timestamp)
+- `bull:{queue}:stalled` - Sorted set of stalled jobs (score = timestamp)
 - `bull:{queue}:{jobId}` - Hash containing job data
 
 ## Performance 🚀

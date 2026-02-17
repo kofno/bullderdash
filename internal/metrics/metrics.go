@@ -9,7 +9,7 @@ var (
 	// Queue metrics
 	QueueWaiting = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "bullmq_queue_waiting_total",
+			Name: "bullmq_queue_waiting",
 			Help: "Number of jobs waiting in queue",
 		},
 		[]string{"queue"},
@@ -17,15 +17,39 @@ var (
 
 	QueueActive = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "bullmq_queue_active_total",
+			Name: "bullmq_queue_active",
 			Help: "Number of jobs currently being processed",
+		},
+		[]string{"queue"},
+	)
+
+	QueuePaused = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "bullmq_queue_paused",
+			Help: "Number of jobs paused in queue",
+		},
+		[]string{"queue"},
+	)
+
+	QueuePrioritized = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "bullmq_queue_prioritized",
+			Help: "Number of prioritized jobs in queue",
+		},
+		[]string{"queue"},
+	)
+
+	QueueWaitingChildren = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "bullmq_queue_waiting_children",
+			Help: "Number of jobs waiting on children in queue",
 		},
 		[]string{"queue"},
 	)
 
 	QueueFailed = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "bullmq_queue_failed_total",
+			Name: "bullmq_queue_failed",
 			Help: "Number of failed jobs in queue",
 		},
 		[]string{"queue"},
@@ -33,7 +57,7 @@ var (
 
 	QueueCompleted = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "bullmq_queue_completed_total",
+			Name: "bullmq_queue_completed",
 			Help: "Number of completed jobs in queue",
 		},
 		[]string{"queue"},
@@ -41,7 +65,7 @@ var (
 
 	QueueDelayed = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "bullmq_queue_delayed_total",
+			Name: "bullmq_queue_delayed",
 			Help: "Number of delayed jobs in queue",
 		},
 		[]string{"queue"},
@@ -49,7 +73,7 @@ var (
 
 	QueueStalled = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "bullmq_queue_stalled_total",
+			Name: "bullmq_queue_stalled",
 			Help: "Number of stalled jobs in queue",
 		},
 		[]string{"queue"},
@@ -57,7 +81,7 @@ var (
 
 	QueueOrphaned = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "bullmq_queue_orphaned_total",
+			Name: "bullmq_queue_orphaned",
 			Help: "Number of orphaned job hashes not in any state list",
 		},
 		[]string{"queue"},

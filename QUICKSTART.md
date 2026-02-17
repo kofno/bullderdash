@@ -28,7 +28,7 @@ bun install
 bun run index.ts
 ```
 
-This simulator continuously creates BullMQ jobs in Valkey that you can monitor. Jobs take 2-5 seconds to process, with realistic failure rates (10-35%).
+This simulator continuously creates BullMQ jobs in Valkey that you can monitor. It includes bursts, priorities, pauses, and parent-child flows.
 
 ### Step 3: Run Bull-der-dash
 
@@ -61,9 +61,14 @@ You should see:
 The main dashboard shows all queues with:
 - Waiting jobs (yellow)
 - Active jobs (blue)
+- Paused jobs (slate)
+- Prioritized jobs (fuchsia)
+- Waiting-children jobs (amber)
 - Completed jobs (green)
 - Failed jobs (red)
 - Delayed jobs (purple)
+- Stalled jobs (orange)
+- Orphaned jobs (gray)
 
 Click any number to see the job list!
 
@@ -127,6 +132,7 @@ export REDIS_PASSWORD=mysecret
 export REDIS_DB=0
 export SERVER_PORT=8080
 export QUEUE_PREFIX=bull
+export METRICS_POLL_SECONDS=10
 export LOG_LEVEL=info
 ```
 
@@ -174,8 +180,9 @@ kubectl logs -l app=bull-der-dash -f
 ## Need Help?
 
 Check these files:
-- `README.md` - Full documentation
-- `DOCS.md` - Complete feature guide
+- `README.md` - Project overview
+- `DOCS.md` - User guide
+- `scripts/sim/README.md` - Simulator details
 - `.env.example` - Configuration examples
 
 Happy monitoring! 🎉
