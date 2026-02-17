@@ -54,8 +54,13 @@ Service metrics:
 
 Environment variables:
 - `REDIS_ADDR` (default `127.0.0.1:6379`)
+- `REDIS_USERNAME` (default empty)
 - `REDIS_PASSWORD` (default empty)
 - `REDIS_DB` (default `0`)
+- `REDIS_SENTINEL_MASTER` (default empty)
+- `REDIS_SENTINEL_ADDRS` (default empty, comma-separated)
+- `REDIS_SENTINEL_USERNAME` (default empty)
+- `REDIS_SENTINEL_PASSWORD` (default empty)
 - `SERVER_PORT` (default `8080`)
 - `QUEUE_PREFIX` (default `bull`)
 - `METRICS_POLL_SECONDS` (default `10`)
@@ -119,7 +124,7 @@ LRANGE bull:orders:active 0 -1
 
 # Paused + waiting-children
 LRANGE bull:orders:paused 0 -1
-LRANGE bull:orders:waiting-children 0 -1
+ZRANGE bull:orders:waiting-children 0 -1
 
 # Prioritized + delayed + failed + completed + stalled
 ZRANGE bull:orders:prioritized 0 -1
@@ -132,7 +137,7 @@ ZRANGE bull:orders:stalled 0 -1
 LLEN bull:orders:wait
 LLEN bull:orders:active
 LLEN bull:orders:paused
-LLEN bull:orders:waiting-children
+ZCARD bull:orders:waiting-children
 ZCARD bull:orders:prioritized
 ZCARD bull:orders:delayed
 ZCARD bull:orders:failed

@@ -70,15 +70,15 @@ func normalizePath(path string) (string, bool) {
 func main() {
 	// 1. Load configuration
 	cfg := config.Load()
-	log.Printf("🔧 Starting Bull-der-dash with config: Redis=%s, Port=%s, Prefix=%s, MetricsPoll=%ds",
-		cfg.RedisAddr, cfg.ServerPort, cfg.QueuePrefix, cfg.MetricsPollSeconds)
+	redisMode := "direct"
+	if cfg.RedisSentinelMaster != "" && len(cfg.RedisSentinelAddrs) > 0 {
+		redisMode = "sentinel"
+	}
+	log.Printf("🔧 Starting Bull-der-dash with config: RedisMode=%s, Redis=%s, Port=%s, Prefix=%s, MetricsPoll=%ds",
+		redisMode, cfg.RedisAddr, cfg.ServerPort, cfg.QueuePrefix, cfg.MetricsPollSeconds)
 
 	// 2. Setup Redis/Valkey client
-	rdb := redis.NewClient(&redis.Options{
-		Addr:     cfg.RedisAddr,
-		Password: cfg.RedisPassword,
-		DB:       cfg.RedisDB,
-	})
+	rdb := newRedisClient(cfg)
 	defer func(rdb *redis.Client) {
 		err := rdb.Close()
 		if err != nil {
@@ -174,4 +174,26 @@ func main() {
 	}
 
 	log.Println("👋 Server exited")
+}
+
+func newRedisClient(cfg *config.Config) *redis.Client {
+	// Enable Sentinel mode only when both master name and sentinel addresses are set.
+	if cfg.RedisSentinelMaster != "" && len(cfg.RedisSentinelAddrs) > 0 {
+		return redis.NewFailoverClient(&redis.FailoverOptions{
+			MasterName:       cfg.RedisSentinelMaster,
+			SentinelAddrs:    cfg.RedisSentinelAddrs,
+			Username:         cfg.RedisUsername,
+			Password:         cfg.RedisPassword,
+			SentinelUsername: cfg.RedisSentinelUsername,
+			SentinelPassword: cfg.RedisSentinelPassword,
+			DB:               cfg.RedisDB,
+		})
+	}
+
+	return redis.NewClient(&redis.Options{
+		Addr:     cfg.RedisAddr,
+		Username: cfg.RedisUsername,
+		Password: cfg.RedisPassword,
+		DB:       cfg.RedisDB,
+	})
 }

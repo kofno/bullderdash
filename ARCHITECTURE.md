@@ -132,8 +132,8 @@ promhttp.Handler()
    │ Collects all registered metrics
    ▼
 Text Response (Prometheus format)
-   │ bullmq_queue_waiting_total{queue="email"} 42
-   │ bullmq_queue_active_total{queue="email"} 5
+   │ bullmq_queue_waiting{queue="email"} 42
+   │ bullmq_queue_active{queue="email"} 5
    │ http_request_duration_seconds_bucket{...} 145
    │ (HTTP path labels are normalized to stable routes)
    │ redis_operation_duration_seconds_bucket{...} 89
@@ -159,7 +159,7 @@ LLEN bull:email:wait       ─┐
 LLEN bull:email:active      │
 LLEN bull:email:paused      │
 ZCARD bull:email:prioritized│    GetQueueStats()
-LLEN bull:email:waiting-children│
+ZCARD bull:email:waiting-children│
 ZCARD bull:email:failed     ├─>  • Execute commands          ─> QueueWaiting.Set()
 ZCARD bull:email:completed  │    (individual)                  QueueActive.Set()
 ZCARD bull:email:delayed    │    • Parse results               QueueFailed.Set()
@@ -206,6 +206,20 @@ Environment Variables          Config Loader              Application
 │ LOG_LEVEL       │          └──────────────┘
 └─────────────────┘
 ```
+
+## Redis Connectivity Modes
+
+Bull-der-dash supports two connection modes:
+
+1. Direct mode
+- Active when `REDIS_SENTINEL_MASTER` or `REDIS_SENTINEL_ADDRS` are not set.
+- Uses `REDIS_ADDR` to connect with optional `REDIS_USERNAME` and `REDIS_PASSWORD`.
+
+2. Sentinel mode
+- Active when both `REDIS_SENTINEL_MASTER` and `REDIS_SENTINEL_ADDRS` are set.
+- Uses go-redis failover client against Sentinel addresses.
+- Supports:
+`REDIS_SENTINEL_MASTER`, `REDIS_SENTINEL_ADDRS`, `REDIS_SENTINEL_USERNAME`, `REDIS_SENTINEL_PASSWORD`, `REDIS_USERNAME`, `REDIS_PASSWORD`, `REDIS_DB`.
 
 ## Concurrency Model
 

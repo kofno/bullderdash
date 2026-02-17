@@ -13,16 +13,17 @@ import (
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:6379", "Redis address")
+	username := flag.String("username", "", "Redis username")
 	password := flag.String("password", "", "Redis password")
 	db := flag.Int("db", 0, "Redis database")
+	sentinelMaster := flag.String("sentinel-master", "", "Sentinel master name")
+	sentinelAddrs := flag.String("sentinel-addrs", "", "Comma-separated Sentinel addresses")
+	sentinelUsername := flag.String("sentinel-username", "", "Sentinel username")
+	sentinelPassword := flag.String("sentinel-password", "", "Sentinel password")
 	flag.Parse()
 
 	// Create Redis client
-	client := redis.NewClient(&redis.Options{
-		Addr:     *addr,
-		Password: *password,
-		DB:       *db,
-	})
+	client := newRedisClient(*addr, *username, *password, *db, *sentinelMaster, *sentinelAddrs, *sentinelUsername, *sentinelPassword)
 	defer func(client *redis.Client) {
 		err := client.Close()
 		if err != nil {
@@ -347,6 +348,37 @@ func main() {
 	}
 }
 
+func newRedisClient(
+	addr string,
+	username string,
+	password string,
+	db int,
+	sentinelMaster string,
+	sentinelAddrs string,
+	sentinelUsername string,
+	sentinelPassword string,
+) *redis.Client {
+	addrs := parseList(sentinelAddrs)
+	if sentinelMaster != "" && len(addrs) > 0 {
+		return redis.NewFailoverClient(&redis.FailoverOptions{
+			MasterName:       sentinelMaster,
+			SentinelAddrs:    addrs,
+			Username:         username,
+			Password:         password,
+			SentinelUsername: sentinelUsername,
+			SentinelPassword: sentinelPassword,
+			DB:               db,
+		})
+	}
+
+	return redis.NewClient(&redis.Options{
+		Addr:     addr,
+		Username: username,
+		Password: password,
+		DB:       db,
+	})
+}
+
 func showHelp() {
 	fmt.Print(`
 Available Commands:
@@ -387,4 +419,20 @@ func parseInt(s string) int {
 		return 0
 	}
 	return i
+}
+
+func parseList(s string) []string {
+	value := strings.TrimSpace(s)
+	if value == "" {
+		return []string{}
+	}
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
 }

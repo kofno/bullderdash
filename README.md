@@ -56,10 +56,16 @@ cd bull-der-dash
 
 # Set environment variables (optional, defaults shown)
 export REDIS_ADDR=127.0.0.1:6379
+export REDIS_USERNAME=
 export REDIS_PASSWORD=
 export REDIS_DB=0
+export REDIS_SENTINEL_MASTER=
+export REDIS_SENTINEL_ADDRS=
+export REDIS_SENTINEL_USERNAME=
+export REDIS_SENTINEL_PASSWORD=
 export SERVER_PORT=8080
 export QUEUE_PREFIX=bull
+export METRICS_POLL_SECONDS=10
 export LOG_LEVEL=info
 
 # Build and run
@@ -99,12 +105,21 @@ All configuration is done via environment variables:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `REDIS_ADDR` | `127.0.0.1:6379` | Redis/Valkey connection string |
+| `REDIS_USERNAME` | (empty) | Redis username (ACL) |
 | `REDIS_PASSWORD` | (empty) | Redis password if required |
 | `REDIS_DB` | `0` | Redis database number |
+| `REDIS_SENTINEL_MASTER` | (empty) | Sentinel master name; enables Sentinel mode when set with addrs |
+| `REDIS_SENTINEL_ADDRS` | (empty) | Comma-separated Sentinel addresses (e.g. `10.0.0.1:26379,10.0.0.2:26379`) |
+| `REDIS_SENTINEL_USERNAME` | (empty) | Sentinel username (if required) |
+| `REDIS_SENTINEL_PASSWORD` | (empty) | Sentinel password (if required) |
 | `SERVER_PORT` | `8080` | HTTP server port |
 | `QUEUE_PREFIX` | `bull` | BullMQ queue prefix in Redis |
 | `METRICS_POLL_SECONDS` | `10` | Background queue stats refresh interval (seconds) |
 | `LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
+
+Sentinel behavior:
+- If both `REDIS_SENTINEL_MASTER` and `REDIS_SENTINEL_ADDRS` are set, the app uses Redis Sentinel failover mode.
+- Otherwise, the app uses direct `REDIS_ADDR` mode.
 
 ## Endpoints 🌐
 
@@ -147,6 +162,12 @@ task build-all
 ```bash
 # From repo root
 ./redis-cli.exe
+```
+
+Sentinel example:
+
+```bash
+./redis-cli.exe --sentinel-master mymaster --sentinel-addrs 10.0.0.1:26379,10.0.0.2:26379 --password your-redis-password
 ```
 
 ### Common Commands
@@ -268,7 +289,7 @@ BullMQ stores data in Redis with these key patterns:
 - `bull:{queue}:active` - List of active job IDs
 - `bull:{queue}:paused` - List of paused job IDs
 - `bull:{queue}:prioritized` - Sorted set of prioritized jobs (score = priority)
-- `bull:{queue}:waiting-children` - List of parent jobs waiting on children
+- `bull:{queue}:waiting-children` - Sorted set of parent jobs waiting on children
 - `bull:{queue}:failed` - Sorted set of failed jobs (score = timestamp)
 - `bull:{queue}:completed` - Sorted set of completed jobs (score = timestamp)
 - `bull:{queue}:delayed` - Sorted set of delayed jobs (score = timestamp)
@@ -296,7 +317,7 @@ Contributions welcome! Areas of focus:
 
 ## License
 
-[Add your license here]
+MIT (see `LICENSE`)
 
 ## Acknowledgments
 

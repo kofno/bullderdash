@@ -41,8 +41,21 @@ go build -o bullderdash.exe .
 
 # Or with custom configuration
 REDIS_ADDR=127.0.0.1:6379 \
+REDIS_USERNAME= \
+REDIS_PASSWORD= \
+REDIS_DB=0 \
 QUEUE_PREFIX=bull \
 SERVER_PORT=8080 \
+METRICS_POLL_SECONDS=10 \
+./bullderdash.exe
+```
+
+Sentinel mode example:
+
+```bash
+REDIS_SENTINEL_MASTER=mymaster \
+REDIS_SENTINEL_ADDRS=10.0.0.1:26379,10.0.0.2:26379 \
+REDIS_PASSWORD=myredispass \
 ./bullderdash.exe
 ```
 
@@ -128,8 +141,13 @@ export REDIS_ADDR=127.0.0.1:6379
 
 # Full configuration
 export REDIS_ADDR=127.0.0.1:6379
+export REDIS_USERNAME=
 export REDIS_PASSWORD=mysecret
 export REDIS_DB=0
+export REDIS_SENTINEL_MASTER=
+export REDIS_SENTINEL_ADDRS=
+export REDIS_SENTINEL_USERNAME=
+export REDIS_SENTINEL_PASSWORD=
 export SERVER_PORT=8080
 export QUEUE_PREFIX=bull
 export METRICS_POLL_SECONDS=10
