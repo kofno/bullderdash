@@ -23,7 +23,12 @@ func main() {
 		Password: *password,
 		DB:       *db,
 	})
-	defer client.Close()
+	defer func(client *redis.Client) {
+		err := client.Close()
+		if err != nil {
+			fmt.Printf("Failed to close Redis client: %v\n", err)
+		}
+	}(client)
 
 	ctx := context.Background()
 
@@ -109,12 +114,12 @@ func main() {
 				continue
 			}
 			key := parts[1]
-			len, err := client.LLen(ctx, key).Result()
+			length, err := client.LLen(ctx, key).Result()
 			if err != nil {
 				fmt.Printf("❌ Error: %v\n", err)
 				continue
 			}
-			fmt.Printf("✅ List length: %d\n", len)
+			fmt.Printf("✅ List length: %d\n", length)
 
 		case "LRANGE":
 			if len(parts) < 4 {
@@ -267,6 +272,9 @@ func truncate(s string, maxLen int) string {
 
 func parseInt(s string) int {
 	var i int
-	fmt.Sscanf(s, "%d", &i)
+	_, err := fmt.Sscanf(s, "%d", &i)
+	if err != nil {
+		return 0
+	}
 	return i
 }
