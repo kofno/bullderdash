@@ -255,3 +255,182 @@ const jobListTmpl = `
     {{end}}
 </div>
 `
+
+// QueueDetailHandler shows detailed view of a single queue with all job states
+func QueueDetailHandler(exp *explorer.Explorer) http.HandlerFunc {
+	tmpl := template.Must(template.New("queue-detail").Parse(queueDetailTmpl))
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Extract queue name from path: /queue/{name}
+		queueName := r.URL.Path[7:] // Skip "/queue/"
+		if queueName == "" {
+			http.Error(w, "queue name required", http.StatusBadRequest)
+			return
+		}
+
+		// Get stats for this queue only
+		stats, err := exp.GetQueueStats(r.Context(), []string{queueName})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		if len(stats) == 0 {
+			http.Error(w, "queue not found", http.StatusNotFound)
+			return
+		}
+
+		stat := stats[0]
+
+		// Get jobs in each state
+		waiting, _ := exp.GetJobsByState(r.Context(), queueName, "waiting", 50)
+		active, _ := exp.GetJobsByState(r.Context(), queueName, "active", 50)
+		completed, _ := exp.GetJobsByState(r.Context(), queueName, "completed", 50)
+		failed, _ := exp.GetJobsByState(r.Context(), queueName, "failed", 50)
+		delayed, _ := exp.GetJobsByState(r.Context(), queueName, "delayed", 50)
+
+		data := struct {
+			Stat      explorer.QueueStats
+			Waiting   []explorer.JobSummary
+			Active    []explorer.JobSummary
+			Completed []explorer.JobSummary
+			Failed    []explorer.JobSummary
+			Delayed   []explorer.JobSummary
+		}{
+			Stat:      stat,
+			Waiting:   waiting,
+			Active:    active,
+			Completed: completed,
+			Failed:    failed,
+			Delayed:   delayed,
+		}
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		err = tmpl.Execute(w, data)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+}
+
+const queueDetailTmpl = `
+<div class="space-y-6">
+    <div class="flex justify-between items-center">
+        <h1 class="text-3xl font-bold text-indigo-600">📋 Queue: {{.Stat.Name}}</h1>
+        <a href="/" class="text-indigo-600 hover:text-indigo-800">← Back to All Queues</a>
+    </div>
+
+    <!-- Stats Overview -->
+    <div class="grid grid-cols-3 gap-4">
+        <div class="bg-yellow-50 p-4 rounded-lg border border-yellow-200">
+            <div class="text-sm text-yellow-600">Waiting</div>
+            <div class="text-3xl font-bold text-yellow-700">{{.Stat.Wait}}</div>
+        </div>
+        <div class="bg-blue-50 p-4 rounded-lg border border-blue-200">
+            <div class="text-sm text-blue-600">Active</div>
+            <div class="text-3xl font-bold text-blue-700">{{.Stat.Active}}</div>
+        </div>
+        <div class="bg-purple-50 p-4 rounded-lg border border-purple-200">
+            <div class="text-sm text-purple-600">Delayed</div>
+            <div class="text-3xl font-bold text-purple-700">{{.Stat.Delayed}}</div>
+        </div>
+        <div class="bg-green-50 p-4 rounded-lg border border-green-200">
+            <div class="text-sm text-green-600">Completed</div>
+            <div class="text-3xl font-bold text-green-700">{{.Stat.Completed}}</div>
+        </div>
+        <div class="bg-red-50 p-4 rounded-lg border border-red-200">
+            <div class="text-sm text-red-600">Failed</div>
+            <div class="text-3xl font-bold text-red-700">{{.Stat.Failed}}</div>
+        </div>
+    </div>
+
+    <!-- Job Lists by State -->
+    <div class="space-y-6">
+        {{if .Waiting}}
+        <div class="bg-white p-6 rounded-lg border border-gray-200">
+            <h2 class="text-xl font-bold text-yellow-600 mb-4">🕐 Waiting ({{len .Waiting}})</h2>
+            <div class="space-y-2">
+                {{range .Waiting}}
+                <div class="flex justify-between items-center p-3 bg-gray-50 rounded">
+                    <div>
+                        <div class="font-mono text-sm text-gray-700">{{.ID}}</div>
+                        <div class="text-xs text-gray-500">{{.Name}}</div>
+                    </div>
+                    <a href="/job/detail?queue={{.Queue}}&id={{.ID}}" class="text-indigo-600 hover:text-indigo-800 text-sm">View →</a>
+                </div>
+                {{end}}
+            </div>
+        </div>
+        {{end}}
+
+        {{if .Active}}
+        <div class="bg-white p-6 rounded-lg border border-gray-200">
+            <h2 class="text-xl font-bold text-blue-600 mb-4">🚀 Active ({{len .Active}})</h2>
+            <div class="space-y-2">
+                {{range .Active}}
+                <div class="flex justify-between items-center p-3 bg-gray-50 rounded">
+                    <div>
+                        <div class="font-mono text-sm text-gray-700">{{.ID}}</div>
+                        <div class="text-xs text-gray-500">{{.Name}} • {{.AttemptsMade}} attempts</div>
+                    </div>
+                    <a href="/job/detail?queue={{.Queue}}&id={{.ID}}" class="text-indigo-600 hover:text-indigo-800 text-sm">View →</a>
+                </div>
+                {{end}}
+            </div>
+        </div>
+        {{end}}
+
+        {{if .Delayed}}
+        <div class="bg-white p-6 rounded-lg border border-gray-200">
+            <h2 class="text-xl font-bold text-purple-600 mb-4">⏰ Delayed ({{len .Delayed}})</h2>
+            <div class="space-y-2">
+                {{range .Delayed}}
+                <div class="flex justify-between items-center p-3 bg-gray-50 rounded">
+                    <div>
+                        <div class="font-mono text-sm text-gray-700">{{.ID}}</div>
+                        <div class="text-xs text-gray-500">{{.Name}}</div>
+                    </div>
+                    <a href="/job/detail?queue={{.Queue}}&id={{.ID}}" class="text-indigo-600 hover:text-indigo-800 text-sm">View →</a>
+                </div>
+                {{end}}
+            </div>
+        </div>
+        {{end}}
+
+        {{if .Completed}}
+        <div class="bg-white p-6 rounded-lg border border-gray-200">
+            <h2 class="text-xl font-bold text-green-600 mb-4">✅ Completed ({{len .Completed}})</h2>
+            <div class="space-y-2">
+                {{range .Completed}}
+                <div class="flex justify-between items-center p-3 bg-gray-50 rounded">
+                    <div>
+                        <div class="font-mono text-sm text-gray-700">{{.ID}}</div>
+                        <div class="text-xs text-gray-500">{{.Name}}</div>
+                    </div>
+                    <a href="/job/detail?queue={{.Queue}}&id={{.ID}}" class="text-indigo-600 hover:text-indigo-800 text-sm">View →</a>
+                </div>
+                {{end}}
+            </div>
+        </div>
+        {{end}}
+
+        {{if .Failed}}
+        <div class="bg-white p-6 rounded-lg border border-gray-200">
+            <h2 class="text-xl font-bold text-red-600 mb-4">❌ Failed ({{len .Failed}})</h2>
+            <div class="space-y-2">
+                {{range .Failed}}
+                <div class="flex justify-between items-center p-3 bg-gray-50 rounded">
+                    <div>
+                        <div class="font-mono text-sm text-gray-700">{{.ID}}</div>
+                        <div class="text-xs text-gray-500">{{.Name}} • {{.AttemptsMade}} attempts</div>
+                    </div>
+                    <a href="/job/detail?queue={{.Queue}}&id={{.ID}}" class="text-indigo-600 hover:text-indigo-800 text-sm">View →</a>
+                </div>
+                {{end}}
+            </div>
+        </div>
+        {{end}}
+    </div>
+</div>
+`

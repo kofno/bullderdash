@@ -82,6 +82,7 @@ func main() {
 
 	mux.HandleFunc("/queues", web.DashboardHandler(exp, cfg.QueuePrefix))
 	mux.HandleFunc("/queue/jobs", web.JobListHandler(exp))
+	mux.HandleFunc("/queue/", web.QueueDetailHandler(exp))
 	mux.HandleFunc("/job/detail", web.JobDetailHandler(exp))
 
 	// Health checks (K8s friendly)
