@@ -275,7 +275,7 @@ const shellTmpl = `
         <div class="max-w-6xl mx-auto bg-white shadow rounded-lg p-6">
             <div class="flex justify-between items-center mb-6">
                 <div>
-                    <h1 class="text-2xl font-bold text-indigo-600">🐂 Bull-der-dash Explorer</h1>
+                    <h1 class="text-2xl font-bold text-indigo-600">🐂 Bullderdash Explorer</h1>
                     {{if .Subtitle}}<div class="text-sm text-gray-500">{{.Subtitle}}</div>{{end}}
                 </div>
                 <div class="flex gap-4 text-sm text-gray-600">
