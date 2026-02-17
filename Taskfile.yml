@@ -40,3 +40,19 @@ tasks:
       BULLMQ_QUEUES: "{{.QUEUES}}"
     cmds:
       - go run .
+
+  build:
+    desc: Build the Bull-der-dash dashboard binary
+    cmds:
+      - go build -o bullderdash.exe .
+
+  build-cli:
+    desc: Build the Redis/Valkey CLI helper binary
+    cmds:
+      - go build -o redis-cli.exe ./cmd/redis-cli
+
+  build-all:
+    desc: Build all binaries (dashboard + redis CLI)
+    cmds:
+      - task: build
+      - task: build-cli

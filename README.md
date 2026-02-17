@@ -9,6 +9,7 @@ A high-performance, production-ready dashboard for monitoring BullMQ queues, bui
 - **Multi-State Tracking**: Monitor waiting, active, failed, completed, and delayed jobs
 - **Job Introspection**: View detailed information about individual jobs
 - **Job Listing**: Browse jobs by state with pagination
+- **Queue Detail View**: Single-queue view with jobs grouped by state
 - **Prometheus Metrics**: Built-in `/metrics` endpoint for monitoring and alerting
 - **Health Checks**: K8s-friendly `/health` and `/ready` endpoints
 - **Environment Configuration**: 12-factor app design with environment variables
@@ -30,6 +31,8 @@ A high-performance, production-ready dashboard for monitoring BullMQ queues, bui
 ```
 bull-der-dash/
 ├── main.go                 # Application entry point
+├── cmd/
+│   └── redis-cli/           # Lightweight Redis/Valkey CLI tool
 ├── internal/
 │   ├── config/            # Environment-based configuration
 │   ├── explorer/          # Redis/Valkey interaction & BullMQ parsing
@@ -60,8 +63,13 @@ export QUEUE_PREFIX=bull
 export LOG_LEVEL=info
 
 # Build and run
-go build -o bullderdash .
-./bullderdash
+# Option A: Taskfile build (recommended)
+task build
+./bullderdash.exe
+
+# Option B: Go build
+go build -o bullderdash.exe .
+./bullderdash.exe
 ```
 
 Visit http://localhost:8080 to see your dashboard!
@@ -100,6 +108,7 @@ All configuration is done via environment variables:
 ### Web UI
 - `GET /` - Main dashboard
 - `GET /queues` - HTMX partial: queue list
+- `GET /queue/<name>` - Single-queue detail view
 - `GET /queue/jobs?queue=<name>&state=<state>` - Job list for a queue/state
 - `GET /job/detail?queue=<name>&id=<id>` - Job detail (JSON)
 
@@ -107,6 +116,46 @@ All configuration is done via environment variables:
 - `GET /health` or `/healthz` - Health check (liveness probe)
 - `GET /ready` or `/readyz` - Readiness check (readiness probe)
 - `GET /metrics` - Prometheus metrics
+
+## Redis CLI Tool (Windows-friendly) 🧰
+
+A lightweight Redis/Valkey CLI is included for Windows users (and works cross-platform).
+
+### Build the CLI
+
+```bash
+# Option A: Taskfile build (recommended)
+task build-cli
+
+# Option B: Go build
+cd cmd/redis-cli
+go build -o ../../redis-cli.exe .
+```
+
+### Build both binaries
+
+```bash
+# Build dashboard + redis CLI
+task build-all
+```
+
+### Use the CLI
+
+```bash
+# From repo root
+./redis-cli.exe
+```
+
+### Common Commands
+
+```bash
+> HELP
+> QUEUE-STATS orders
+> KEYS bull:*
+> LRANGE bull:orders:wait 0 10
+> HGETALL bull:orders:1
+> TYPE bull:orders:wait
+```
 
 ## Metrics 📊
 
@@ -219,7 +268,7 @@ BullMQ stores data in Redis with these key patterns:
 Bull-der-dash is designed for efficiency:
 
 - **Low Memory**: ~20-30MB RSS under typical load
-- **Fast Queries**: Pipelined Redis commands for bulk operations
+- **Fast Queries**: Lightweight per-key Redis commands for queue stats
 - **Concurrent**: Go's goroutines handle multiple requests efficiently
 - **Scalable**: Stateless design allows horizontal scaling
 
