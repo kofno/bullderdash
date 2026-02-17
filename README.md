@@ -87,8 +87,10 @@ bun install
 bun run index.ts
 
 # Run bull-der-dash
-./bullderdash
+./bullderdash.exe
 ```
+
+> On Windows PowerShell, use `./bullderdash.exe` or `.\bullderdash.exe`
 
 ## Configuration ⚙️
 
@@ -291,4 +293,3 @@ Contributions welcome! Areas of focus:
 - [BullMQ](https://github.com/taskforcesh/bullmq) - The excellent Node.js queue library we're monitoring
 - [Bluge](https://github.com/blugelabs/bluge) - Planned search engine integration
 - [HTMX](https://htmx.org/) - Keeping the frontend simple and fast
-

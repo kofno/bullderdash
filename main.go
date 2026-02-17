@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -50,35 +49,7 @@ func main() {
 	mux := http.NewServeMux()
 
 	// Main dashboard
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		_, err := fmt.Fprint(w, `
-        <html>
-            <head>
-                <script src="https://unpkg.com/htmx.org@1.9.10"></script>
-                <script src="https://cdn.tailwindcss.com"></script>
-                <title>Bull-der-dash</title>
-            </head>
-            <body class="bg-gray-50 p-10">
-                <div class="max-w-6xl mx-auto bg-white shadow rounded-lg p-6">
-                    <div class="flex justify-between items-center mb-6">
-                        <h1 class="text-2xl font-bold text-indigo-600">🐂 Bull-der-dash Explorer</h1>
-                        <div class="flex gap-4 text-sm text-gray-600">
-                            <a href="/metrics" target="_blank" class="hover:text-indigo-600">📊 Metrics</a>
-                            <a href="/health" target="_blank" class="hover:text-indigo-600">💚 Health</a>
-                        </div>
-                    </div>
-                    <div id="queue-list" hx-get="/queues" hx-trigger="load, every 5s">
-                        Loading queues...
-                    </div>
-                </div>
-            </body>
-        </html>
-        `)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-	})
+	mux.HandleFunc("/", web.HomeHandler())
 
 	mux.HandleFunc("/queues", web.DashboardHandler(exp, cfg.QueuePrefix))
 	mux.HandleFunc("/queue/jobs", web.JobListHandler(exp))
