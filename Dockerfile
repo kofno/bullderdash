@@ -9,8 +9,9 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the application
+# Build the applications
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o bullderdash .
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o redis-cli ./cmd/redis-cli
 
 # Final stage
 FROM alpine:latest
@@ -19,8 +20,9 @@ RUN apk --no-cache add ca-certificates
 
 WORKDIR /root/
 
-# Copy the binary from builder
+# Copy the binaries from builder
 COPY --from=builder /app/bullderdash .
+COPY --from=builder /app/redis-cli .
 
 # Expose port
 EXPOSE 8080
