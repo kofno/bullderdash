@@ -106,6 +106,7 @@ func main() {
 	mux.HandleFunc("/queue/jobs", web.JobListHandler(exp))
 	mux.HandleFunc("/queue/", web.QueueDetailHandler(exp))
 	mux.HandleFunc("/job/detail", web.JobDetailHandler(exp))
+	mux.HandleFunc("/search", web.SearchPageHandler(exp, cfg.QueuePrefix))
 
 	// Health checks (K8s friendly)
 	mux.HandleFunc("/health", web.HealthHandler())

@@ -96,6 +96,9 @@ type JobSummary struct {
 	Queue        string
 	Timestamp    time.Time
 	AttemptsMade int
+	Data         string
+	Opts         string
+	FailedReason string
 }
 
 func (e *Explorer) GetQueueStats(ctx context.Context, queues []string) ([]QueueStats, error) {
@@ -434,6 +437,8 @@ func (e *Explorer) GetJobsByState(ctx context.Context, queueName, state string, 
 				jobIDs = append(jobIDs, id)
 			}
 		}
+	case "stalled":
+		jobIDs, err = e.client.ZRange(ctx, prefix+":stalled", 0, int64(limit-1)).Result()
 	default:
 		return nil, fmt.Errorf("unknown state: %s", state)
 	}
@@ -450,14 +455,66 @@ func (e *Explorer) GetJobsByState(ctx context.Context, queueName, state string, 
 		if err != nil {
 			continue // Skip jobs that can't be loaded
 		}
+		summaryState := state
+		if job.State != "" && job.State != "unknown" {
+			summaryState = job.State
+		}
+		dataStr := ""
+		if job.Data != nil {
+			if b, err := json.Marshal(job.Data); err == nil {
+				dataStr = string(b)
+			}
+		}
+		optsStr := ""
+		if job.Opts != nil {
+			if b, err := json.Marshal(job.Opts); err == nil {
+				optsStr = string(b)
+			}
+		}
 		summaries = append(summaries, JobSummary{
 			ID:           job.ID,
 			Name:         job.Name,
-			State:        state,
+			State:        summaryState,
 			Queue:        queueName,
 			Timestamp:    time.Unix(job.Timestamp/1000, 0),
 			AttemptsMade: job.AttemptsMade,
+			Data:         dataStr,
+			Opts:         optsStr,
+			FailedReason: job.FailedReason,
 		})
+	}
+
+	return summaries, nil
+}
+
+// GetJobsAcrossStates retrieves jobs from all known states for a queue.
+func (e *Explorer) GetJobsAcrossStates(ctx context.Context, queueName string, limitPerState int) ([]JobSummary, error) {
+	states := []string{
+		"waiting",
+		"active",
+		"paused",
+		"prioritized",
+		"waiting-children",
+		"failed",
+		"completed",
+		"delayed",
+		"stalled",
+	}
+
+	seen := make(map[string]bool)
+	var summaries []JobSummary
+	for _, state := range states {
+		jobs, err := e.GetJobsByState(ctx, queueName, state, limitPerState)
+		if err != nil {
+			return nil, err
+		}
+		for _, job := range jobs {
+			if seen[job.ID] {
+				continue
+			}
+			seen[job.ID] = true
+			summaries = append(summaries, job)
+		}
 	}
 
 	return summaries, nil

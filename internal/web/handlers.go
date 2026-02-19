@@ -147,24 +147,51 @@ func JobListHandler(exp *explorer.Explorer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		queueName := r.URL.Query().Get("queue")
 		state := r.URL.Query().Get("state")
+		query := strings.TrimSpace(r.URL.Query().Get("q"))
 		if queueName == "" || state == "" {
 			http.Error(w, "queue and state parameters required", http.StatusBadRequest)
 			return
 		}
 
-		jobs, err := exp.GetJobsByState(r.Context(), queueName, state, 100)
+		displayState := state
+		limit := 100
+		var jobs []explorer.JobSummary
+		var err error
+		if state == "all" || query != "" {
+			displayState = "all"
+			limit = 200
+			jobs, err = exp.GetJobsAcrossStates(r.Context(), queueName, limit)
+		} else {
+			jobs, err = exp.GetJobsByState(r.Context(), queueName, state, limit)
+		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
+		}
+		if query != "" {
+			queryLower := strings.ToLower(query)
+			filtered := jobs[:0]
+			for _, job := range jobs {
+				if strings.Contains(strings.ToLower(job.ID), queryLower) ||
+					strings.Contains(strings.ToLower(job.Name), queryLower) ||
+					strings.Contains(strings.ToLower(job.Data), queryLower) ||
+					strings.Contains(strings.ToLower(job.Opts), queryLower) ||
+					strings.Contains(strings.ToLower(job.FailedReason), queryLower) {
+					filtered = append(filtered, job)
+				}
+			}
+			jobs = filtered
 		}
 
 		data := struct {
 			Queue string
 			State string
+			Query string
 			Jobs  []explorer.JobSummary
 		}{
 			Queue: queueName,
-			State: state,
+			State: displayState,
+			Query: query,
 			Jobs:  jobs,
 		}
 
@@ -260,8 +287,41 @@ const jobListTmpl = `
         <div class="flex items-center gap-4 text-sm">
             <a href="/queue/{{.Data.Queue}}" class="font-medium text-indigo-600 hover:text-indigo-800">← Back to Queue</a>
             <a href="/" class="font-medium text-gray-500 hover:text-gray-700">All Queues</a>
+            {{if ne .Data.State "all"}}
+            <a href="/queue/jobs?queue={{.Data.Queue}}&state=all" class="font-medium text-gray-500 hover:text-gray-700">All States View</a>
+            {{end}}
         </div>
     </div>
+
+    <form class="flex flex-wrap items-end gap-3" method="get" action="/queue/jobs">
+        <input type="hidden" name="queue" value="{{.Data.Queue}}">
+        <input type="hidden" name="state" value="{{.Data.State}}">
+        <label class="flex flex-col text-xs uppercase tracking-wide text-gray-400">
+            Search Jobs
+            <span class="mt-1 text-[10px] normal-case text-gray-400">Searches all states</span>
+            <input
+                type="text"
+                name="q"
+                value="{{.Data.Query}}"
+                placeholder="Job ID or name (all states)"
+                class="mt-1 w-64 rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            />
+        </label>
+        <button
+            type="submit"
+            class="h-9 rounded-md bg-indigo-600 px-4 text-sm font-medium text-white hover:bg-indigo-700"
+        >
+            Search
+        </button>
+        {{if .Data.Query}}
+        <a
+            href="/queue/jobs?queue={{.Data.Queue}}&state={{.Data.State}}"
+            class="h-9 rounded-md border border-gray-300 px-3 text-sm font-medium text-gray-600 hover:text-gray-900 flex items-center"
+        >
+            Clear
+        </a>
+        {{end}}
+    </form>
 
     {{if .Data.Jobs}}
     <div class="overflow-x-auto rounded-lg border border-gray-200">
@@ -296,7 +356,11 @@ const jobListTmpl = `
     </div>
     {{else}}
     <div class="text-center py-12 text-gray-500 border border-dashed border-gray-200 rounded-lg">
-        No jobs in {{.Data.State}} state
+        {{if .Data.Query}}
+            No jobs matching "{{.Data.Query}}"
+        {{else}}
+            No jobs in {{.Data.State}} state
+        {{end}}
     </div>
     {{end}}
 </div>
@@ -318,17 +382,18 @@ const shellTmpl = `
     </head>
     <body class="bg-gray-50 p-10">
         <div class="max-w-6xl mx-auto bg-white shadow rounded-lg p-6">
-            <div class="flex justify-between items-center mb-6">
-                <div>
-                    <h1 class="text-2xl font-bold text-indigo-600">🐂 Bullderdash Explorer</h1>
-                    {{if .Subtitle}}<div class="text-sm text-gray-500">{{.Subtitle}}</div>{{end}}
-                </div>
-                <div class="flex gap-4 text-sm text-gray-600">
-                    <a href="/" class="hover:text-indigo-600">Home</a>
-                    <a href="/metrics" target="_blank" class="hover:text-indigo-600">📊 Metrics</a>
-                    <a href="/health" target="_blank" class="hover:text-indigo-600">💚 Health</a>
-                </div>
+        <div class="flex justify-between items-center mb-6">
+            <div>
+                <h1 class="text-2xl font-bold text-indigo-600">🐂 Bullderdash Explorer</h1>
+                {{if .Subtitle}}<div class="text-sm text-gray-500">{{.Subtitle}}</div>{{end}}
             </div>
+            <div class="flex gap-4 text-sm text-gray-600">
+                <a href="/" class="hover:text-indigo-600">Home</a>
+                <a href="/search" class="font-medium text-indigo-600 hover:text-indigo-800">Search Jobs</a>
+                <a href="/metrics" target="_blank" class="hover:text-indigo-600">📊 Metrics</a>
+                <a href="/health" target="_blank" class="hover:text-indigo-600">💚 Health</a>
+            </div>
+        </div>
 
             {{template "content" .}}
         </div>
@@ -339,6 +404,47 @@ const shellTmpl = `
 const homeContentTmpl = `
 <div id="queue-list" hx-get="/queues" hx-trigger="load, every 5s">
     Loading queues...
+</div>
+`
+
+const searchPageTmpl = `
+<div class="space-y-6">
+    <div>
+        <div class="text-sm uppercase tracking-wide text-gray-400">Search Jobs</div>
+        <div class="text-xl font-semibold text-indigo-700">Find jobs across states</div>
+    </div>
+
+    <form class="flex flex-wrap items-end gap-4" method="get" action="/queue/jobs">
+        <label class="flex flex-col text-xs uppercase tracking-wide text-gray-400">
+            Queue
+            <select
+                name="queue"
+                class="mt-1 w-64 rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                required
+            >
+                {{range .Data.Queues}}
+                <option value="{{.}}" {{if eq . $.Data.SelectedQueue}}selected{{end}}>{{.}}</option>
+                {{end}}
+            </select>
+        </label>
+        <input type="hidden" name="state" value="all">
+        <label class="flex flex-col text-xs uppercase tracking-wide text-gray-400">
+            Query
+            <input
+                type="text"
+                name="q"
+                value="{{.Data.Query}}"
+                placeholder="Job ID, name, data, opts, failedReason"
+                class="mt-1 w-80 rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            />
+        </label>
+        <button
+            type="submit"
+            class="h-9 rounded-md bg-indigo-600 px-4 text-sm font-medium text-white hover:bg-indigo-700"
+        >
+            Search
+        </button>
+    </form>
 </div>
 `
 
@@ -367,6 +473,38 @@ func HomeHandler() http.HandlerFunc {
 		err := renderShell(w, "Bull-der-dash", "", homeContentTmpl, nil)
 		if err != nil {
 			log.Printf("❌ renderShell error (home): %v", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+}
+
+// SearchPageHandler renders a global search form with queue selection
+func SearchPageHandler(exp *explorer.Explorer, prefix string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		queues, err := exp.DiscoverQueues(r.Context(), prefix)
+		if err != nil {
+			log.Printf("❌ DiscoverQueues error (search): %v", err)
+			http.Error(w, fmt.Sprintf("DiscoverQueues error: %v", err), http.StatusInternalServerError)
+			return
+		}
+		selectedQueue := strings.TrimSpace(r.URL.Query().Get("queue"))
+		query := strings.TrimSpace(r.URL.Query().Get("q"))
+		if selectedQueue == "" && len(queues) > 0 {
+			selectedQueue = queues[0]
+		}
+		data := struct {
+			Queues        []string
+			SelectedQueue string
+			Query         string
+		}{
+			Queues:        queues,
+			SelectedQueue: selectedQueue,
+			Query:         query,
+		}
+		err = renderShell(w, "Bull-der-dash - Search", "Search jobs across states", searchPageTmpl, data)
+		if err != nil {
+			log.Printf("❌ renderShell error (search): %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -457,6 +595,11 @@ const queueDetailTmpl = `
         <div class="text-lg font-semibold text-indigo-700">{{.Data.Stat.Name}}</div>
         <div class="mt-2 text-sm text-gray-600">Total jobs</div>
         <div class="text-2xl font-bold text-gray-900">{{.Data.Stat.Total}}</div>
+        <div class="mt-4">
+            <a href="/queue/jobs?queue={{.Data.Stat.Name}}&state=all" class="inline-flex items-center rounded-md bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700">
+                Search Jobs →
+            </a>
+        </div>
     </div>
     <div class="rounded-lg border border-gray-200 p-4">
         <div class="text-xs uppercase text-gray-400">Flow</div>
