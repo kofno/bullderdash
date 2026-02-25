@@ -1,0 +1,82 @@
+image:
+  repository: ghcr.io/kofno/bull-der-dash
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: false
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+service:
+  type: ClusterIP
+  port: 80
+
+containerPort: 8080
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: bull-der-dash.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+env:
+  redis:
+    addr: "127.0.0.1:6379"
+    username: ""
+    password: ""
+    passwordSecret:
+      name: ""
+      key: ""
+    db: 0
+    sentinelMaster: ""
+    sentinelAddrs: ""
+    sentinelUsername: ""
+    sentinelPassword: ""
+    sentinelPasswordSecret:
+      name: ""
+      key: ""
+  queuePrefix: "bull"
+  metricsPollSeconds: 10
+  logLevel: "info"
+
+extraEnv: []
+extraEnvFrom: []
+
+resources: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+startupProbe:
+  enabled: true
+  path: /healthz
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 30
+
+livenessProbe:
+  path: /healthz
+  initialDelaySeconds: 15
+  periodSeconds: 20
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  path: /readyz
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3

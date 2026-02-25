@@ -1,0 +1,6 @@
+apiVersion: v2
+name: bull-der-dash
+description: A high-performance dashboard for monitoring BullMQ queues
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
