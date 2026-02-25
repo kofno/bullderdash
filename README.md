@@ -202,67 +202,32 @@ Bull-der-dash exposes the following Prometheus metrics:
 - `redis_operation_duration_seconds{operation}` - Redis operation latency
 - `redis_operation_errors_total{operation}` - Redis operation errors
 
-## Kubernetes Deployment 🚢
+## Helm Install (GHCR) ⛵
 
-Example deployment manifest:
+Bull-der-dash is packaged as a Helm chart and published to GHCR as an OCI artifact.
+
+```bash
+# Log in to GHCR (GitHub token with packages:read)
+echo $GITHUB_TOKEN | helm registry login ghcr.io -u kofno --password-stdin
+
+# Install from OCI chart
+helm install bull-der-dash oci://ghcr.io/kofno/charts/bull-der-dash \
+  --version 1.2.3 \
+  --namespace mynamespace \
+  --create-namespace \
+  --set image.repository=ghcr.io/kofno/bull-der-dash
+```
+
+Example values (Redis Sentinel):
 
 ```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: bull-der-dash
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: bull-der-dash
-  template:
-    metadata:
-      labels:
-        app: bull-der-dash
-    spec:
-      containers:
-      - name: bull-der-dash
-        image: your-registry/bull-der-dash:latest
-        ports:
-        - containerPort: 8080
-          name: http
-        env:
-        - name: REDIS_ADDR
-          value: "valkey-service:6379"
-        - name: QUEUE_PREFIX
-          value: "bull"
-        resources:
-          requests:
-            memory: "64Mi"
-            cpu: "100m"
-          limits:
-            memory: "128Mi"
-            cpu: "200m"
-        livenessProbe:
-          httpGet:
-            path: /healthz
-            port: 8080
-          initialDelaySeconds: 10
-          periodSeconds: 10
-        readinessProbe:
-          httpGet:
-            path: /readyz
-            port: 8080
-          initialDelaySeconds: 5
-          periodSeconds: 5
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: bull-der-dash
-spec:
-  selector:
-    app: bull-der-dash
-  ports:
-  - port: 80
-    targetPort: 8080
-  type: LoadBalancer
+env:
+  redis:
+    sentinelMaster: "mymaster"
+    sentinelAddrs: "10.0.0.1:26379,10.0.0.2:26379,10.0.0.3:26379"
+    passwordSecret:
+      name: redis-auth
+      key: redis-password
 ```
 
 ## Development 🛠️

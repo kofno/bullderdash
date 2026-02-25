@@ -171,20 +171,27 @@ docker run -d \
 docker logs -f bull-der-dash
 ```
 
-## Kubernetes Quick Start
+## Kubernetes Quick Start (Helm)
 
 ```bash
-# Apply deployment
-kubectl apply -f k8s/deployment.yaml
+# Log in to GHCR (GitHub token with packages:read)
+echo $GITHUB_TOKEN | helm registry login ghcr.io -u kofno --password-stdin
+
+# Install from OCI chart
+helm install bull-der-dash oci://ghcr.io/kofno/charts/bull-der-dash \
+  --version 1.2.3 \
+  --namespace bull-der-dash \
+  --create-namespace \
+  --set image.repository=ghcr.io/kofno/bull-der-dash
 
 # Check status
-kubectl get pods -l app=bull-der-dash
+kubectl get pods -l app.kubernetes.io/name=bull-der-dash
 
 # Port forward
 kubectl port-forward svc/bull-der-dash 8080:80
 
 # View logs
-kubectl logs -l app=bull-der-dash -f
+kubectl logs -l app.kubernetes.io/name=bull-der-dash -f
 ```
 
 ## Next Steps
