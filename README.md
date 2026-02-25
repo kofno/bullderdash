@@ -212,7 +212,7 @@ echo $GITHUB_TOKEN | helm registry login ghcr.io -u kofno --password-stdin
 
 # Install from OCI chart
 helm install bull-der-dash oci://ghcr.io/kofno/charts/bull-der-dash \
-  --version 1.2.3 \
+  --version 0.0.2 \
   --namespace mynamespace \
   --create-namespace \
   --set image.repository=ghcr.io/kofno/bull-der-dash

@@ -1,0 +1,124 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "bull-der-dash.fullname" . }}
+  labels:
+    {{- include "bull-der-dash.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "bull-der-dash.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "bull-der-dash.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ default (include "bull-der-dash.fullname" .) .Values.serviceAccount.name }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: bull-der-dash
+          image: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.containerPort }}
+          env:
+            - name: REDIS_ADDR
+              value: {{ .Values.env.redis.addr | quote }}
+            - name: REDIS_USERNAME
+              value: {{ .Values.env.redis.username | quote }}
+            {{- if .Values.env.redis.passwordSecret.name }}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.redis.passwordSecret.name | quote }}
+                  key: {{ .Values.env.redis.passwordSecret.key | quote }}
+            {{- else }}
+            - name: REDIS_PASSWORD
+              value: {{ .Values.env.redis.password | quote }}
+            {{- end }}
+            - name: REDIS_DB
+              value: {{ .Values.env.redis.db | quote }}
+            - name: REDIS_SENTINEL_MASTER
+              value: {{ .Values.env.redis.sentinelMaster | quote }}
+            - name: REDIS_SENTINEL_ADDRS
+              value: {{ .Values.env.redis.sentinelAddrs | quote }}
+            - name: REDIS_SENTINEL_USERNAME
+              value: {{ .Values.env.redis.sentinelUsername | quote }}
+            {{- if .Values.env.redis.sentinelPasswordSecret.name }}
+            - name: REDIS_SENTINEL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.env.redis.sentinelPasswordSecret.name | quote }}
+                  key: {{ .Values.env.redis.sentinelPasswordSecret.key | quote }}
+            {{- else }}
+            - name: REDIS_SENTINEL_PASSWORD
+              value: {{ .Values.env.redis.sentinelPassword | quote }}
+            {{- end }}
+            - name: SERVER_PORT
+              value: {{ .Values.containerPort | quote }}
+            - name: QUEUE_PREFIX
+              value: {{ .Values.env.queuePrefix | quote }}
+            - name: METRICS_POLL_SECONDS
+              value: {{ .Values.env.metricsPollSeconds | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.env.logLevel | quote }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.startupProbe.enabled }}
+          startupProbe:
+            httpGet:
+              path: {{ .Values.startupProbe.path }}
+              port: http
+            periodSeconds: {{ .Values.startupProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.startupProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.startupProbe.failureThreshold }}
+          {{- end }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.livenessProbe.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.readinessProbe.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
