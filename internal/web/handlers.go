@@ -1,12 +1,14 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"html/template"
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/kofno/bullderdash/internal/explorer"
 )
@@ -96,10 +98,14 @@ const queueListTmpl = `
             </div>
             <div class="flex items-center justify-between rounded-md bg-gray-100 px-2 py-1">
                 <span class="text-gray-700">Orphaned</span>
-                {{if gt .Orphaned 0}}
-                    <span class="font-semibold text-gray-900">{{.Orphaned}}</span>
+                {{if .OrphanedKnown}}
+                    {{if gt .Orphaned 0}}
+                        <span class="font-semibold text-gray-900">{{.Orphaned}}</span>
+                    {{else}}
+                        <span class="text-gray-400">{{.Orphaned}}</span>
+                    {{end}}
                 {{else}}
-                    <span class="text-gray-400">{{.Orphaned}}</span>
+                    <span class="text-gray-400" title="Orphaned is available in diagnostic views">diag</span>
                 {{end}}
             </div>
         </div>
@@ -111,34 +117,27 @@ const queueListTmpl = `
 </div>
 `
 
-func DashboardHandler(exp *explorer.Explorer, prefix string) http.HandlerFunc {
+func DashboardHandler(exp *explorer.Explorer, prefix string, cache *DashboardCache) http.HandlerFunc {
 	tmpl := template.Must(template.New("queues").Parse(queueListTmpl))
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		queues, err := exp.DiscoverQueues(r.Context(), prefix)
-		if err != nil {
-			log.Printf("❌ DiscoverQueues error: %v", err)
-			http.Error(w, fmt.Sprintf("DiscoverQueues error: %v", err), http.StatusInternalServerError)
-			return
+		snapshot := cache.Get()
+		if len(snapshot.Stats) == 0 {
+			if err := refreshDashboardCache(r.Context(), exp, prefix, cache); err != nil {
+				log.Printf("❌ dashboard snapshot refresh error: %v", err)
+				http.Error(w, fmt.Sprintf("Dashboard snapshot unavailable: %v", err), http.StatusServiceUnavailable)
+				return
+			}
+			snapshot = cache.Get()
 		}
-		log.Printf("✅ Found %d queues: %v", len(queues), queues)
-
-		queueStats, err := exp.GetQueueStats(r.Context(), queues)
-		if err != nil {
-			log.Printf("❌ GetQueueStats error: %v", err)
-			http.Error(w, fmt.Sprintf("GetQueueStats error: %v", err), http.StatusInternalServerError)
-			return
-		}
-		log.Printf("✅ Got stats for %d queues: %+v", len(queueStats), queueStats)
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		err = tmpl.Execute(w, queueStats)
+		err := tmpl.Execute(w, snapshot.Stats)
 		if err != nil {
 			log.Printf("❌ Template execution error: %v", err)
 			http.Error(w, fmt.Sprintf("Template error: %v", err), http.StatusInternalServerError)
 			return
 		}
-		log.Printf("✅ Template rendered successfully")
 	}
 }
 
@@ -254,8 +253,10 @@ func HealthHandler() http.HandlerFunc {
 // ReadyHandler provides readiness check endpoint
 func ReadyHandler(exp *explorer.Explorer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Try to ping Redis
-		_, err := exp.DiscoverQueues(r.Context(), "bull")
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+
+		err := exp.Ping(ctx)
 		if err != nil {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_, err := fmt.Fprintf(w, "Redis unavailable: %v", err)
@@ -480,13 +481,17 @@ func HomeHandler() http.HandlerFunc {
 }
 
 // SearchPageHandler renders a global search form with queue selection
-func SearchPageHandler(exp *explorer.Explorer, prefix string) http.HandlerFunc {
+func SearchPageHandler(exp *explorer.Explorer, prefix string, cache *DashboardCache) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		queues, err := exp.DiscoverQueues(r.Context(), prefix)
-		if err != nil {
-			log.Printf("❌ DiscoverQueues error (search): %v", err)
-			http.Error(w, fmt.Sprintf("DiscoverQueues error: %v", err), http.StatusInternalServerError)
-			return
+		snapshot := cache.Get()
+		queues := snapshot.Queues
+		if len(queues) == 0 {
+			if err := refreshDashboardCache(r.Context(), exp, prefix, cache); err != nil {
+				log.Printf("❌ DiscoverQueues error (search): %v", err)
+				http.Error(w, fmt.Sprintf("DiscoverQueues error: %v", err), http.StatusInternalServerError)
+				return
+			}
+			queues = cache.Get().Queues
 		}
 		selectedQueue := strings.TrimSpace(r.URL.Query().Get("queue"))
 		query := strings.TrimSpace(r.URL.Query().Get("q"))
@@ -502,13 +507,28 @@ func SearchPageHandler(exp *explorer.Explorer, prefix string) http.HandlerFunc {
 			SelectedQueue: selectedQueue,
 			Query:         query,
 		}
-		err = renderShell(w, "Bull-der-dash - Search", "Search jobs across states", searchPageTmpl, data)
+		err := renderShell(w, "Bull-der-dash - Search", "Search jobs across states", searchPageTmpl, data)
 		if err != nil {
 			log.Printf("❌ renderShell error (search): %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
+}
+
+func refreshDashboardCache(ctx context.Context, exp *explorer.Explorer, prefix string, cache *DashboardCache) error {
+	queues, err := exp.DiscoverQueues(ctx, prefix)
+	if err != nil {
+		return err
+	}
+
+	stats, err := exp.GetQueueStatsFast(ctx, prefix, queues)
+	if err != nil {
+		return err
+	}
+
+	cache.Set(queues, stats, time.Now())
+	return nil
 }
 
 // QueueDetailHandler shows detailed view of a single queue with all job states

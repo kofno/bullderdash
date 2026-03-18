@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -22,7 +23,7 @@ func New(client *redis.Client) *Explorer {
 // DiscoverQueues finds all BullMQ queues by looking for the ":id" suffix
 func (e *Explorer) DiscoverQueues(ctx context.Context, prefix string) ([]string, error) {
 	var cursor uint64
-	var queues []string
+	seen := make(map[string]struct{})
 
 	// Default prefix is usually "bull"
 	pattern := prefix + ":*:id"
@@ -34,11 +35,15 @@ func (e *Explorer) DiscoverQueues(ctx context.Context, prefix string) ([]string,
 		}
 
 		for _, key := range keys {
-			// Key format: "bull:my-queue-name:id"
-			parts := strings.Split(key, ":")
-			if len(parts) >= 3 {
-				queues = append(queues, parts[1])
+			queueName, ok := strings.CutPrefix(key, prefix+":")
+			if !ok {
+				continue
 			}
+			queueName, ok = strings.CutSuffix(queueName, ":id")
+			if !ok || queueName == "" {
+				continue
+			}
+			seen[queueName] = struct{}{}
 		}
 
 		cursor = nextCursor
@@ -48,9 +53,11 @@ func (e *Explorer) DiscoverQueues(ctx context.Context, prefix string) ([]string,
 	}
 
 	// Ensure we never return nil slice, return empty slice instead
-	if queues == nil {
-		queues = make([]string, 0)
+	queues := make([]string, 0, len(seen))
+	for queue := range seen {
+		queues = append(queues, queue)
 	}
+	sort.Strings(queues)
 	return queues, nil
 }
 
@@ -66,6 +73,7 @@ type QueueStats struct {
 	Delayed         int64
 	Stalled         int64
 	Orphaned        int64
+	OrphanedKnown   bool
 	Total           int64
 }
 
@@ -237,27 +245,146 @@ func (e *Explorer) GetQueueStats(ctx context.Context, queues []string) ([]QueueS
 			Delayed:         delayedCard,
 			Stalled:         stalledCard,
 			Orphaned:        orphanedCount,
+			OrphanedKnown:   true,
 			Total:           waitLen + activeLen + pausedLen + prioritizedLen + waitingChildrenLen + failedCard + completedCard + delayedCard + stalledCard + orphanedCount,
 		}
 		stats = append(stats, stat)
 
-		// Update Prometheus metrics
-		metrics.QueueWaiting.WithLabelValues(q).Set(float64(stat.Wait))
-		metrics.QueueActive.WithLabelValues(q).Set(float64(stat.Active))
-		metrics.QueuePaused.WithLabelValues(q).Set(float64(stat.Paused))
-		metrics.QueuePrioritized.WithLabelValues(q).Set(float64(stat.Prioritized))
-		metrics.QueueWaitingChildren.WithLabelValues(q).Set(float64(stat.WaitingChildren))
-		metrics.QueueFailed.WithLabelValues(q).Set(float64(stat.Failed))
-		metrics.QueueCompleted.WithLabelValues(q).Set(float64(stat.Completed))
-		metrics.QueueDelayed.WithLabelValues(q).Set(float64(stat.Delayed))
-		metrics.QueueStalled.WithLabelValues(q).Set(float64(stat.Stalled))
-		metrics.QueueOrphaned.WithLabelValues(q).Set(float64(stat.Orphaned))
+		updateQueueMetrics(stat)
 	}
 
 	// Ensure we never return nil slice, return empty slice instead
 	if stats == nil {
 		stats = make([]QueueStats, 0)
 	}
+	return stats, nil
+}
+
+// Ping verifies Redis/Valkey connectivity with a cheap readiness-safe command.
+func (e *Explorer) Ping(ctx context.Context) error {
+	start := time.Now()
+	defer func() {
+		metrics.RedisOperationDuration.WithLabelValues("ping").Observe(time.Since(start).Seconds())
+	}()
+
+	if err := e.client.Ping(ctx).Err(); err != nil {
+		metrics.RedisOperationErrors.WithLabelValues("ping").Inc()
+		return err
+	}
+	return nil
+}
+
+// GetQueueStatsFast returns queue counts using only cheap cardinality operations.
+func (e *Explorer) GetQueueStatsFast(ctx context.Context, queuePrefix string, queues []string) ([]QueueStats, error) {
+	start := time.Now()
+	defer func() {
+		metrics.RedisOperationDuration.WithLabelValues("get_queue_stats_fast").Observe(time.Since(start).Seconds())
+	}()
+
+	if len(queues) == 0 {
+		return make([]QueueStats, 0), nil
+	}
+
+	type queueCommands struct {
+		wait            *redis.IntCmd
+		active          *redis.IntCmd
+		paused          *redis.IntCmd
+		prioritized     *redis.IntCmd
+		waitingChildren *redis.IntCmd
+		failed          *redis.IntCmd
+		completed       *redis.IntCmd
+		delayed         *redis.IntCmd
+		stalled         *redis.IntCmd
+	}
+
+	cmds := make([]queueCommands, len(queues))
+	pipe := e.client.Pipeline()
+	for i, q := range queues {
+		prefix := fmt.Sprintf("%s:%s", queuePrefix, q)
+		cmds[i] = queueCommands{
+			wait:            pipe.LLen(ctx, prefix+":wait"),
+			active:          pipe.LLen(ctx, prefix+":active"),
+			paused:          pipe.LLen(ctx, prefix+":paused"),
+			prioritized:     pipe.ZCard(ctx, prefix+":prioritized"),
+			waitingChildren: pipe.ZCard(ctx, prefix+":waiting-children"),
+			failed:          pipe.ZCard(ctx, prefix+":failed"),
+			completed:       pipe.ZCard(ctx, prefix+":completed"),
+			delayed:         pipe.ZCard(ctx, prefix+":delayed"),
+			stalled:         pipe.ZCard(ctx, prefix+":stalled"),
+		}
+	}
+
+	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
+		metrics.RedisOperationErrors.WithLabelValues("get_queue_stats_fast").Inc()
+		return nil, err
+	}
+
+	stats := make([]QueueStats, 0, len(queues))
+	for i, q := range queues {
+		waitLen, err := intCmdValue(cmds[i].wait)
+		if err != nil {
+			metrics.RedisOperationErrors.WithLabelValues("get_queue_stats_fast").Inc()
+			return nil, err
+		}
+		activeLen, err := intCmdValue(cmds[i].active)
+		if err != nil {
+			metrics.RedisOperationErrors.WithLabelValues("get_queue_stats_fast").Inc()
+			return nil, err
+		}
+		pausedLen, err := intCmdValue(cmds[i].paused)
+		if err != nil {
+			metrics.RedisOperationErrors.WithLabelValues("get_queue_stats_fast").Inc()
+			return nil, err
+		}
+		prioritizedLen, err := intCmdValue(cmds[i].prioritized)
+		if err != nil {
+			metrics.RedisOperationErrors.WithLabelValues("get_queue_stats_fast").Inc()
+			return nil, err
+		}
+		waitingChildrenLen, err := intCmdValue(cmds[i].waitingChildren)
+		if err != nil {
+			metrics.RedisOperationErrors.WithLabelValues("get_queue_stats_fast").Inc()
+			return nil, err
+		}
+		failedLen, err := intCmdValue(cmds[i].failed)
+		if err != nil {
+			metrics.RedisOperationErrors.WithLabelValues("get_queue_stats_fast").Inc()
+			return nil, err
+		}
+		completedLen, err := intCmdValue(cmds[i].completed)
+		if err != nil {
+			metrics.RedisOperationErrors.WithLabelValues("get_queue_stats_fast").Inc()
+			return nil, err
+		}
+		delayedLen, err := intCmdValue(cmds[i].delayed)
+		if err != nil {
+			metrics.RedisOperationErrors.WithLabelValues("get_queue_stats_fast").Inc()
+			return nil, err
+		}
+		stalledLen, err := intCmdValue(cmds[i].stalled)
+		if err != nil {
+			metrics.RedisOperationErrors.WithLabelValues("get_queue_stats_fast").Inc()
+			return nil, err
+		}
+
+		stat := QueueStats{
+			Name:            q,
+			Wait:            waitLen,
+			Active:          activeLen,
+			Paused:          pausedLen,
+			Prioritized:     prioritizedLen,
+			WaitingChildren: waitingChildrenLen,
+			Failed:          failedLen,
+			Completed:       completedLen,
+			Delayed:         delayedLen,
+			Stalled:         stalledLen,
+			OrphanedKnown:   false,
+			Total:           waitLen + activeLen + pausedLen + prioritizedLen + waitingChildrenLen + failedLen + completedLen + delayedLen + stalledLen,
+		}
+		stats = append(stats, stat)
+		updateQueueMetrics(stat)
+	}
+
 	return stats, nil
 }
 
@@ -518,4 +645,26 @@ func (e *Explorer) GetJobsAcrossStates(ctx context.Context, queueName string, li
 	}
 
 	return summaries, nil
+}
+
+func intCmdValue(cmd *redis.IntCmd) (int64, error) {
+	if err := cmd.Err(); err != nil && err != redis.Nil {
+		return 0, err
+	}
+	return cmd.Val(), nil
+}
+
+func updateQueueMetrics(stat QueueStats) {
+	metrics.QueueWaiting.WithLabelValues(stat.Name).Set(float64(stat.Wait))
+	metrics.QueueActive.WithLabelValues(stat.Name).Set(float64(stat.Active))
+	metrics.QueuePaused.WithLabelValues(stat.Name).Set(float64(stat.Paused))
+	metrics.QueuePrioritized.WithLabelValues(stat.Name).Set(float64(stat.Prioritized))
+	metrics.QueueWaitingChildren.WithLabelValues(stat.Name).Set(float64(stat.WaitingChildren))
+	metrics.QueueFailed.WithLabelValues(stat.Name).Set(float64(stat.Failed))
+	metrics.QueueCompleted.WithLabelValues(stat.Name).Set(float64(stat.Completed))
+	metrics.QueueDelayed.WithLabelValues(stat.Name).Set(float64(stat.Delayed))
+	metrics.QueueStalled.WithLabelValues(stat.Name).Set(float64(stat.Stalled))
+	if stat.OrphanedKnown {
+		metrics.QueueOrphaned.WithLabelValues(stat.Name).Set(float64(stat.Orphaned))
+	}
 }
