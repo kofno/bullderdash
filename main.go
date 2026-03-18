@@ -52,6 +52,8 @@ func normalizePath(path string) (string, bool) {
 		return "/queues", true
 	case path == "/queue/jobs":
 		return "/queue/jobs", true
+	case path == "/queue/summary":
+		return "/queue/summary", true
 	case strings.HasPrefix(path, "/queue/"):
 		return "/queue/:name", true
 	case path == "/job/detail":
@@ -105,7 +107,8 @@ func main() {
 
 	mux.HandleFunc("/queues", web.DashboardHandler(exp, cfg.QueuePrefix, dashboardCache))
 	mux.HandleFunc("/queue/jobs", web.JobListHandler(exp))
-	mux.HandleFunc("/queue/", web.QueueDetailHandler(exp))
+	mux.HandleFunc("/queue/summary", web.QueueSummaryHandler(exp, cfg.QueuePrefix))
+	mux.HandleFunc("/queue/", web.QueueDetailHandler(exp, cfg.QueuePrefix))
 	mux.HandleFunc("/job/detail", web.JobDetailHandler(exp))
 	mux.HandleFunc("/search", web.SearchPageHandler(exp, cfg.QueuePrefix, dashboardCache))
 

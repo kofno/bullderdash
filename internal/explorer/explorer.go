@@ -314,10 +314,7 @@ func (e *Explorer) GetQueueStatsFast(ctx context.Context, queuePrefix string, qu
 		}
 	}
 
-	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
-		metrics.RedisOperationErrors.WithLabelValues("get_queue_stats_fast").Inc()
-		return nil, err
-	}
+	_, _ = pipe.Exec(ctx)
 
 	stats := make([]QueueStats, 0, len(queues))
 	for i, q := range queues {
@@ -528,33 +525,47 @@ func (e *Explorer) determineJobState(ctx context.Context, queueName, jobID strin
 
 // GetJobsByState retrieves jobs in a specific state (waiting, active, failed, etc.)
 func (e *Explorer) GetJobsByState(ctx context.Context, queueName, state string, limit int) ([]JobSummary, error) {
+	return e.GetJobsByStatePage(ctx, queueName, state, 0, limit)
+}
+
+// GetJobsByStatePage retrieves jobs in a specific state with offset/limit pagination.
+func (e *Explorer) GetJobsByStatePage(ctx context.Context, queueName, state string, offset, limit int) ([]JobSummary, error) {
 	start := time.Now()
 	defer func() {
 		metrics.RedisOperationDuration.WithLabelValues("get_jobs_by_state").Observe(time.Since(start).Seconds())
 	}()
 
+	if limit <= 0 {
+		return make([]JobSummary, 0), nil
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
 	prefix := fmt.Sprintf("bull:%s", queueName)
 	var jobIDs []string
 	var err error
+	startIdx := int64(offset)
+	endIdx := int64(offset + limit - 1)
 
 	switch state {
 	case "waiting":
-		jobIDs, err = e.client.LRange(ctx, prefix+":wait", 0, int64(limit-1)).Result()
+		jobIDs, err = e.client.LRange(ctx, prefix+":wait", startIdx, endIdx).Result()
 	case "active":
-		jobIDs, err = e.client.LRange(ctx, prefix+":active", 0, int64(limit-1)).Result()
+		jobIDs, err = e.client.LRange(ctx, prefix+":active", startIdx, endIdx).Result()
 	case "paused":
-		jobIDs, err = e.client.LRange(ctx, prefix+":paused", 0, int64(limit-1)).Result()
+		jobIDs, err = e.client.LRange(ctx, prefix+":paused", startIdx, endIdx).Result()
 	case "prioritized":
-		jobIDs, err = e.client.ZRange(ctx, prefix+":prioritized", 0, int64(limit-1)).Result()
+		jobIDs, err = e.client.ZRange(ctx, prefix+":prioritized", startIdx, endIdx).Result()
 	case "waiting-children":
-		jobIDs, err = e.client.ZRange(ctx, prefix+":waiting-children", 0, int64(limit-1)).Result()
+		jobIDs, err = e.client.ZRange(ctx, prefix+":waiting-children", startIdx, endIdx).Result()
 	case "failed":
-		jobIDs, err = e.client.ZRange(ctx, prefix+":failed", 0, int64(limit-1)).Result()
+		jobIDs, err = e.client.ZRange(ctx, prefix+":failed", startIdx, endIdx).Result()
 	case "completed":
-		jobIDs, err = e.client.ZRange(ctx, prefix+":completed", 0, int64(limit-1)).Result()
+		jobIDs, err = e.client.ZRange(ctx, prefix+":completed", startIdx, endIdx).Result()
 	case "delayed":
 		// For delayed jobs, we get them from the sorted set
-		results, err := e.client.ZRangeWithScores(ctx, prefix+":delayed", 0, int64(limit-1)).Result()
+		results, err := e.client.ZRangeWithScores(ctx, prefix+":delayed", startIdx, endIdx).Result()
 		if err != nil {
 			metrics.RedisOperationErrors.WithLabelValues("get_jobs_by_state").Inc()
 			return nil, err
@@ -565,7 +576,7 @@ func (e *Explorer) GetJobsByState(ctx context.Context, queueName, state string, 
 			}
 		}
 	case "stalled":
-		jobIDs, err = e.client.ZRange(ctx, prefix+":stalled", 0, int64(limit-1)).Result()
+		jobIDs, err = e.client.ZRange(ctx, prefix+":stalled", startIdx, endIdx).Result()
 	default:
 		return nil, fmt.Errorf("unknown state: %s", state)
 	}
@@ -575,47 +586,16 @@ func (e *Explorer) GetJobsByState(ctx context.Context, queueName, state string, 
 		return nil, err
 	}
 
-	// Fetch basic info for each job
-	var summaries []JobSummary
-	for _, jobID := range jobIDs {
-		job, err := e.GetJob(ctx, queueName, jobID)
-		if err != nil {
-			continue // Skip jobs that can't be loaded
-		}
-		summaryState := state
-		if job.State != "" && job.State != "unknown" {
-			summaryState = job.State
-		}
-		dataStr := ""
-		if job.Data != nil {
-			if b, err := json.Marshal(job.Data); err == nil {
-				dataStr = string(b)
-			}
-		}
-		optsStr := ""
-		if job.Opts != nil {
-			if b, err := json.Marshal(job.Opts); err == nil {
-				optsStr = string(b)
-			}
-		}
-		summaries = append(summaries, JobSummary{
-			ID:           job.ID,
-			Name:         job.Name,
-			State:        summaryState,
-			Queue:        queueName,
-			Timestamp:    time.Unix(job.Timestamp/1000, 0),
-			AttemptsMade: job.AttemptsMade,
-			Data:         dataStr,
-			Opts:         optsStr,
-			FailedReason: job.FailedReason,
-		})
-	}
-
-	return summaries, nil
+	return e.loadJobSummaries(ctx, queueName, state, jobIDs)
 }
 
 // GetJobsAcrossStates retrieves jobs from all known states for a queue.
 func (e *Explorer) GetJobsAcrossStates(ctx context.Context, queueName string, limitPerState int) ([]JobSummary, error) {
+	return e.GetJobsAcrossStatesPage(ctx, queueName, 0, limitPerState)
+}
+
+// GetJobsAcrossStatesPage retrieves jobs from all known states for a queue with offset/limit pagination per state.
+func (e *Explorer) GetJobsAcrossStatesPage(ctx context.Context, queueName string, offsetPerState, limitPerState int) ([]JobSummary, error) {
 	states := []string{
 		"waiting",
 		"active",
@@ -631,7 +611,7 @@ func (e *Explorer) GetJobsAcrossStates(ctx context.Context, queueName string, li
 	seen := make(map[string]bool)
 	var summaries []JobSummary
 	for _, state := range states {
-		jobs, err := e.GetJobsByState(ctx, queueName, state, limitPerState)
+		jobs, err := e.GetJobsByStatePage(ctx, queueName, state, offsetPerState, limitPerState)
 		if err != nil {
 			return nil, err
 		}
@@ -648,10 +628,17 @@ func (e *Explorer) GetJobsAcrossStates(ctx context.Context, queueName string, li
 }
 
 func intCmdValue(cmd *redis.IntCmd) (int64, error) {
-	if err := cmd.Err(); err != nil && err != redis.Nil {
+	if err := cmd.Err(); err != nil && !isBenignCountError(err) {
 		return 0, err
 	}
 	return cmd.Val(), nil
+}
+
+func isBenignCountError(err error) bool {
+	if err == nil || err == redis.Nil {
+		return true
+	}
+	return strings.Contains(err.Error(), "WRONGTYPE")
 }
 
 func updateQueueMetrics(stat QueueStats) {
@@ -667,4 +654,82 @@ func updateQueueMetrics(stat QueueStats) {
 	if stat.OrphanedKnown {
 		metrics.QueueOrphaned.WithLabelValues(stat.Name).Set(float64(stat.Orphaned))
 	}
+}
+
+func (e *Explorer) loadJobSummaries(ctx context.Context, queueName, state string, jobIDs []string) ([]JobSummary, error) {
+	if len(jobIDs) == 0 {
+		return make([]JobSummary, 0), nil
+	}
+
+	pipe := e.client.Pipeline()
+	cmds := make([]*redis.MapStringStringCmd, 0, len(jobIDs))
+	for _, jobID := range jobIDs {
+		key := fmt.Sprintf("bull:%s:%s", queueName, jobID)
+		cmds = append(cmds, pipe.HGetAll(ctx, key))
+	}
+
+	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
+		metrics.RedisOperationErrors.WithLabelValues("get_jobs_by_state").Inc()
+		return nil, err
+	}
+
+	summaries := make([]JobSummary, 0, len(jobIDs))
+	for idx, cmd := range cmds {
+		if err := cmd.Err(); err != nil && err != redis.Nil {
+			continue
+		}
+
+		data := cmd.Val()
+		if len(data) == 0 {
+			continue
+		}
+
+		jobID := jobIDs[idx]
+		summary := JobSummary{
+			ID:    jobID,
+			Name:  data["name"],
+			State: state,
+			Queue: queueName,
+		}
+
+		if timestamp := data["timestamp"]; timestamp != "" {
+			var ts int64
+			if _, err := fmt.Sscanf(timestamp, "%d", &ts); err == nil && ts > 0 {
+				summary.Timestamp = time.Unix(ts/1000, 0)
+			}
+		}
+		if attemptsMade := data["attemptsMade"]; attemptsMade != "" {
+			_, _ = fmt.Sscanf(attemptsMade, "%d", &summary.AttemptsMade)
+		}
+		if failedReason, ok := data["failedReason"]; ok {
+			summary.FailedReason = failedReason
+		}
+		if dataStr, ok := data["data"]; ok {
+			summary.Data = compactJSON(dataStr)
+		}
+		if optsStr, ok := data["opts"]; ok {
+			summary.Opts = compactJSON(optsStr)
+		}
+
+		summaries = append(summaries, summary)
+	}
+
+	return summaries, nil
+}
+
+func compactJSON(raw string) string {
+	if raw == "" {
+		return ""
+	}
+
+	var decoded any
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return raw
+	}
+
+	encoded, err := json.Marshal(decoded)
+	if err != nil {
+		return raw
+	}
+	return string(encoded)
 }
