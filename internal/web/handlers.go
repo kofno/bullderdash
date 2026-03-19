@@ -1,12 +1,15 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"html/template"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kofno/bullderdash/internal/explorer"
 )
@@ -96,10 +99,14 @@ const queueListTmpl = `
             </div>
             <div class="flex items-center justify-between rounded-md bg-gray-100 px-2 py-1">
                 <span class="text-gray-700">Orphaned</span>
-                {{if gt .Orphaned 0}}
-                    <span class="font-semibold text-gray-900">{{.Orphaned}}</span>
+                {{if .OrphanedKnown}}
+                    {{if gt .Orphaned 0}}
+                        <span class="font-semibold text-gray-900">{{.Orphaned}}</span>
+                    {{else}}
+                        <span class="text-gray-400">{{.Orphaned}}</span>
+                    {{end}}
                 {{else}}
-                    <span class="text-gray-400">{{.Orphaned}}</span>
+                    <span class="text-gray-400" title="Orphaned is available in diagnostic views">diag</span>
                 {{end}}
             </div>
         </div>
@@ -111,40 +118,39 @@ const queueListTmpl = `
 </div>
 `
 
-func DashboardHandler(exp *explorer.Explorer, prefix string) http.HandlerFunc {
+func DashboardHandler(exp *explorer.Explorer, prefix string, cache *DashboardCache) http.HandlerFunc {
 	tmpl := template.Must(template.New("queues").Parse(queueListTmpl))
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		queues, err := exp.DiscoverQueues(r.Context(), prefix)
-		if err != nil {
-			log.Printf("❌ DiscoverQueues error: %v", err)
-			http.Error(w, fmt.Sprintf("DiscoverQueues error: %v", err), http.StatusInternalServerError)
-			return
+		snapshot := cache.Get()
+		if len(snapshot.Stats) == 0 {
+			if err := refreshDashboardCache(r.Context(), exp, prefix, cache); err != nil {
+				log.Printf("❌ dashboard snapshot refresh error: %v", err)
+				http.Error(w, fmt.Sprintf("Dashboard snapshot unavailable: %v", err), http.StatusServiceUnavailable)
+				return
+			}
+			snapshot = cache.Get()
 		}
-		log.Printf("✅ Found %d queues: %v", len(queues), queues)
-
-		queueStats, err := exp.GetQueueStats(r.Context(), queues)
-		if err != nil {
-			log.Printf("❌ GetQueueStats error: %v", err)
-			http.Error(w, fmt.Sprintf("GetQueueStats error: %v", err), http.StatusInternalServerError)
-			return
-		}
-		log.Printf("✅ Got stats for %d queues: %+v", len(queueStats), queueStats)
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		err = tmpl.Execute(w, queueStats)
+		err := tmpl.Execute(w, snapshot.Stats)
 		if err != nil {
 			log.Printf("❌ Template execution error: %v", err)
 			http.Error(w, fmt.Sprintf("Template error: %v", err), http.StatusInternalServerError)
 			return
 		}
-		log.Printf("✅ Template rendered successfully")
 	}
 }
 
 // JobListHandler shows jobs in a specific state for a queue
 func JobListHandler(exp *explorer.Explorer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		const (
+			statePageSize      = 100
+			allStatesPageSize  = 50
+			searchScanPerState = 100
+		)
+
 		queueName := r.URL.Query().Get("queue")
 		state := r.URL.Query().Get("state")
 		query := strings.TrimSpace(r.URL.Query().Get("q"))
@@ -154,15 +160,34 @@ func JobListHandler(exp *explorer.Explorer) http.HandlerFunc {
 		}
 
 		displayState := state
-		limit := 100
+		page := parsePositiveInt(r.URL.Query().Get("page"), 1)
+		offset := 0
+		limit := statePageSize
+		searchedJobs := 0
+		windowLabel := ""
 		var jobs []explorer.JobSummary
 		var err error
-		if state == "all" || query != "" {
+
+		switch {
+		case query != "":
 			displayState = "all"
-			limit = 200
-			jobs, err = exp.GetJobsAcrossStates(r.Context(), queueName, limit)
-		} else {
-			jobs, err = exp.GetJobsByState(r.Context(), queueName, state, limit)
+			limit = searchScanPerState
+			offset = (page - 1) * searchScanPerState
+			jobs, err = exp.GetJobsAcrossStatesPage(r.Context(), queueName, offset, limit)
+			searchedJobs = len(jobs)
+			windowLabel = fmt.Sprintf("Search window: jobs %d-%d from each state", offset+1, offset+limit)
+		case state == "all":
+			displayState = "all"
+			limit = allStatesPageSize
+			offset = (page - 1) * allStatesPageSize
+			jobs, err = exp.GetJobsAcrossStatesPage(r.Context(), queueName, offset, limit)
+			searchedJobs = len(jobs)
+			windowLabel = fmt.Sprintf("Showing jobs %d-%d from each state", offset+1, offset+limit)
+		default:
+			offset = (page - 1) * statePageSize
+			jobs, err = exp.GetJobsByStatePage(r.Context(), queueName, state, offset, limit)
+			searchedJobs = len(jobs)
+			windowLabel = fmt.Sprintf("Showing jobs %d-%d in %s", offset+1, offset+limit, state)
 		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -184,19 +209,32 @@ func JobListHandler(exp *explorer.Explorer) http.HandlerFunc {
 		}
 
 		data := struct {
-			Queue string
-			State string
-			Query string
-			Jobs  []explorer.JobSummary
+			Queue        string
+			State        string
+			Query        string
+			Jobs         []explorer.JobSummary
+			Page         int
+			HasPrevPage  bool
+			HasNextPage  bool
+			WindowLabel  string
+			SearchedJobs int
 		}{
-			Queue: queueName,
-			State: displayState,
-			Query: query,
-			Jobs:  jobs,
+			Queue:        queueName,
+			State:        displayState,
+			Query:        query,
+			Jobs:         jobs,
+			Page:         page,
+			HasPrevPage:  page > 1,
+			HasNextPage:  len(jobs) == limit,
+			WindowLabel:  windowLabel,
+			SearchedJobs: searchedJobs,
 		}
 
 		if r.Header.Get("HX-Request") != "" {
-			tmpl := template.Must(template.New("jobs").Parse(jobListTmpl))
+			tmpl := template.Must(template.New("jobs").Funcs(template.FuncMap{
+				"add": func(a, b int) int { return a + b },
+				"sub": func(a, b int) int { return a - b },
+			}).Parse(jobListTmpl))
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			if err := tmpl.Execute(w, pageData{Data: data}); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -254,8 +292,10 @@ func HealthHandler() http.HandlerFunc {
 // ReadyHandler provides readiness check endpoint
 func ReadyHandler(exp *explorer.Explorer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Try to ping Redis
-		_, err := exp.DiscoverQueues(r.Context(), "bull")
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+
+		err := exp.Ping(ctx)
 		if err != nil {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_, err := fmt.Fprintf(w, "Redis unavailable: %v", err)
@@ -298,7 +338,7 @@ const jobListTmpl = `
         <input type="hidden" name="state" value="{{.Data.State}}">
         <label class="flex flex-col text-xs uppercase tracking-wide text-gray-400">
             Search Jobs
-            <span class="mt-1 text-[10px] normal-case text-gray-400">Searches all states</span>
+            <span class="mt-1 text-[10px] normal-case text-gray-400">Searches a paged window across all states</span>
             <input
                 type="text"
                 name="q"
@@ -322,6 +362,13 @@ const jobListTmpl = `
         </a>
         {{end}}
     </form>
+
+    {{if .Data.WindowLabel}}
+    <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">
+        <span>{{.Data.WindowLabel}}</span>
+        <span>{{.Data.SearchedJobs}} jobs loaded for this page</span>
+    </div>
+    {{end}}
 
     {{if .Data.Jobs}}
     <div class="overflow-x-auto rounded-lg border border-gray-200">
@@ -357,12 +404,34 @@ const jobListTmpl = `
     {{else}}
     <div class="text-center py-12 text-gray-500 border border-dashed border-gray-200 rounded-lg">
         {{if .Data.Query}}
-            No jobs matching "{{.Data.Query}}"
+            No jobs matching "{{.Data.Query}}" in this search window
         {{else}}
             No jobs in {{.Data.State}} state
         {{end}}
     </div>
     {{end}}
+
+    <div class="flex flex-wrap items-center justify-between gap-3 text-sm">
+        <div class="text-gray-500">Page {{.Data.Page}}</div>
+        <div class="flex items-center gap-3">
+            {{if .Data.HasPrevPage}}
+            <a
+                href="/queue/jobs?queue={{.Data.Queue}}&state={{.Data.State}}&q={{.Data.Query}}&page={{sub .Data.Page 1}}"
+                class="rounded-md border border-gray-300 px-3 py-2 font-medium text-gray-600 hover:text-gray-900"
+            >
+                Previous
+            </a>
+            {{end}}
+            {{if .Data.HasNextPage}}
+            <a
+                href="/queue/jobs?queue={{.Data.Queue}}&state={{.Data.State}}&q={{.Data.Query}}&page={{add .Data.Page 1}}"
+                class="rounded-md border border-gray-300 px-3 py-2 font-medium text-gray-600 hover:text-gray-900"
+            >
+                Next
+            </a>
+            {{end}}
+        </div>
+    </div>
 </div>
 `
 
@@ -412,6 +481,7 @@ const searchPageTmpl = `
     <div>
         <div class="text-sm uppercase tracking-wide text-gray-400">Search Jobs</div>
         <div class="text-xl font-semibold text-indigo-700">Find jobs across states</div>
+        <div class="mt-1 text-sm text-gray-500">Searches a paged window from each state so results stay fast on large queues.</div>
     </div>
 
     <form class="flex flex-wrap items-end gap-4" method="get" action="/queue/jobs">
@@ -434,7 +504,7 @@ const searchPageTmpl = `
                 type="text"
                 name="q"
                 value="{{.Data.Query}}"
-                placeholder="Job ID, name, data, opts, failedReason"
+                placeholder="Job ID, name, data, opts, failed reason"
                 class="mt-1 w-80 rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             />
         </label>
@@ -449,7 +519,10 @@ const searchPageTmpl = `
 `
 
 func renderShell(w http.ResponseWriter, title, subtitle, contentTmpl string, data interface{}) error {
-	tmpl, err := template.New("shell").Parse(shellTmpl)
+	tmpl, err := template.New("shell").Funcs(template.FuncMap{
+		"add": func(a, b int) int { return a + b },
+		"sub": func(a, b int) int { return a - b },
+	}).Parse(shellTmpl)
 	if err != nil {
 		return err
 	}
@@ -467,6 +540,20 @@ func renderShell(w http.ResponseWriter, title, subtitle, contentTmpl string, dat
 	})
 }
 
+func parsePositiveInt(raw string, fallback int) int {
+	if fallback < 1 {
+		fallback = 1
+	}
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 1 {
+		return fallback
+	}
+	return value
+}
+
 // HomeHandler renders the main dashboard shell
 func HomeHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -480,13 +567,17 @@ func HomeHandler() http.HandlerFunc {
 }
 
 // SearchPageHandler renders a global search form with queue selection
-func SearchPageHandler(exp *explorer.Explorer, prefix string) http.HandlerFunc {
+func SearchPageHandler(exp *explorer.Explorer, prefix string, cache *DashboardCache) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		queues, err := exp.DiscoverQueues(r.Context(), prefix)
-		if err != nil {
-			log.Printf("❌ DiscoverQueues error (search): %v", err)
-			http.Error(w, fmt.Sprintf("DiscoverQueues error: %v", err), http.StatusInternalServerError)
-			return
+		snapshot := cache.Get()
+		queues := snapshot.Queues
+		if len(queues) == 0 {
+			if err := refreshDashboardCache(r.Context(), exp, prefix, cache); err != nil {
+				log.Printf("❌ DiscoverQueues error (search): %v", err)
+				http.Error(w, fmt.Sprintf("DiscoverQueues error: %v", err), http.StatusInternalServerError)
+				return
+			}
+			queues = cache.Get().Queues
 		}
 		selectedQueue := strings.TrimSpace(r.URL.Query().Get("queue"))
 		query := strings.TrimSpace(r.URL.Query().Get("q"))
@@ -502,7 +593,7 @@ func SearchPageHandler(exp *explorer.Explorer, prefix string) http.HandlerFunc {
 			SelectedQueue: selectedQueue,
 			Query:         query,
 		}
-		err = renderShell(w, "Bull-der-dash - Search", "Search jobs across states", searchPageTmpl, data)
+		err := renderShell(w, "Bull-der-dash - Search", "Search jobs across states in paged windows", searchPageTmpl, data)
 		if err != nil {
 			log.Printf("❌ renderShell error (search): %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -511,8 +602,65 @@ func SearchPageHandler(exp *explorer.Explorer, prefix string) http.HandlerFunc {
 	}
 }
 
+func refreshDashboardCache(ctx context.Context, exp *explorer.Explorer, prefix string, cache *DashboardCache) error {
+	queues, err := exp.DiscoverQueues(ctx, prefix)
+	if err != nil {
+		return err
+	}
+
+	stats, err := exp.GetQueueStatsFast(ctx, prefix, queues)
+	if err != nil {
+		return err
+	}
+
+	cache.Set(queues, stats, time.Now())
+	return nil
+}
+
+type queueDetailPageData struct {
+	Stat            explorer.QueueStats
+	SummaryHTML     template.HTML
+	Waiting         []explorer.JobSummary
+	Active          []explorer.JobSummary
+	Paused          []explorer.JobSummary
+	Prioritized     []explorer.JobSummary
+	WaitingChildren []explorer.JobSummary
+	Completed       []explorer.JobSummary
+	Failed          []explorer.JobSummary
+	Delayed         []explorer.JobSummary
+}
+
+type queueSummaryViewData struct {
+	Stat explorer.QueueStats
+}
+
+// QueueSummaryHandler renders the fast, polled summary for a queue.
+func QueueSummaryHandler(exp *explorer.Explorer, prefix string) http.HandlerFunc {
+	tmpl := template.Must(template.New("queue-summary").Parse(queueSummaryTmpl))
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		queueName := strings.TrimSpace(r.URL.Query().Get("queue"))
+		if queueName == "" {
+			http.Error(w, "queue parameter required", http.StatusBadRequest)
+			return
+		}
+
+		stat, err := loadFastQueueStat(r.Context(), exp, prefix, queueName)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := tmpl.Execute(w, pageData{Data: queueSummaryViewData{Stat: stat}}); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+}
+
 // QueueDetailHandler shows detailed view of a single queue with all job states
-func QueueDetailHandler(exp *explorer.Explorer) http.HandlerFunc {
+func QueueDetailHandler(exp *explorer.Explorer, prefix string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Extract queue name from path: /queue/{name}
 		queueName := strings.TrimPrefix(r.URL.Path, "/queue/")
@@ -521,19 +669,11 @@ func QueueDetailHandler(exp *explorer.Explorer) http.HandlerFunc {
 			return
 		}
 
-		// Get stats for this queue only
-		stats, err := exp.GetQueueStats(r.Context(), []string{queueName})
+		stat, err := loadFastQueueStat(r.Context(), exp, prefix, queueName)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-
-		if len(stats) == 0 {
-			http.Error(w, "queue not found", http.StatusNotFound)
-			return
-		}
-
-		stat := stats[0]
 
 		// Get jobs in each state
 		waiting, _ := exp.GetJobsByState(r.Context(), queueName, "waiting", 50)
@@ -545,18 +685,15 @@ func QueueDetailHandler(exp *explorer.Explorer) http.HandlerFunc {
 		failed, _ := exp.GetJobsByState(r.Context(), queueName, "failed", 50)
 		delayed, _ := exp.GetJobsByState(r.Context(), queueName, "delayed", 50)
 
-		data := struct {
-			Stat            explorer.QueueStats
-			Waiting         []explorer.JobSummary
-			Active          []explorer.JobSummary
-			Paused          []explorer.JobSummary
-			Prioritized     []explorer.JobSummary
-			WaitingChildren []explorer.JobSummary
-			Completed       []explorer.JobSummary
-			Failed          []explorer.JobSummary
-			Delayed         []explorer.JobSummary
-		}{
+		summaryHTML, err := renderQueueSummaryHTML(stat)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		data := queueDetailPageData{
 			Stat:            stat,
+			SummaryHTML:     summaryHTML,
 			Waiting:         waiting,
 			Active:          active,
 			Paused:          paused,
@@ -565,17 +702,6 @@ func QueueDetailHandler(exp *explorer.Explorer) http.HandlerFunc {
 			Completed:       completed,
 			Failed:          failed,
 			Delayed:         delayed,
-		}
-
-		if r.Header.Get("HX-Request") != "" {
-			tmpl := template.Must(template.New("queue-detail").Parse(queueDetailTmpl))
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			if err := tmpl.Execute(w, pageData{Data: data}); err != nil {
-				log.Printf("❌ queue detail fragment render error (queue=%s): %v", queueName, err)
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			return
 		}
 
 		err = renderShell(w, "Bull-der-dash - "+queueName, "Queue: "+queueName, queueDetailTmpl, data)
@@ -587,8 +713,33 @@ func QueueDetailHandler(exp *explorer.Explorer) http.HandlerFunc {
 	}
 }
 
-const queueDetailTmpl = `
-<div id="queue-detail" hx-get="/queue/{{.Data.Stat.Name}}" hx-trigger="every 5s" hx-swap="outerHTML">
+func loadFastQueueStat(ctx context.Context, exp *explorer.Explorer, prefix, queueName string) (explorer.QueueStats, error) {
+	stats, err := exp.GetQueueStatsFast(ctx, prefix, []string{queueName})
+	if err != nil {
+		return explorer.QueueStats{}, err
+	}
+	if len(stats) == 0 {
+		return explorer.QueueStats{}, fmt.Errorf("queue not found")
+	}
+	return stats[0], nil
+}
+
+func renderQueueSummaryHTML(stat explorer.QueueStats) (template.HTML, error) {
+	tmpl, err := template.New("queue-summary").Parse(queueSummaryTmpl)
+	if err != nil {
+		return "", err
+	}
+
+	var b strings.Builder
+	if err := tmpl.Execute(&b, pageData{Data: queueSummaryViewData{Stat: stat}}); err != nil {
+		return "", err
+	}
+
+	return template.HTML(b.String()), nil
+}
+
+const queueSummaryTmpl = `
+<div id="queue-summary" hx-get="/queue/summary?queue={{.Data.Stat.Name}}" hx-trigger="every 5s" hx-swap="outerHTML">
 <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-8">
     <div class="rounded-lg border border-gray-200 p-4">
         <div class="text-xs uppercase text-gray-400">Queue</div>
@@ -635,7 +786,11 @@ const queueDetailTmpl = `
             </div>
             <div class="flex items-center justify-between rounded-md bg-gray-100 px-2 py-1">
                 <span class="text-gray-700">Orphaned</span>
-                <span class="font-semibold text-gray-900">{{.Data.Stat.Orphaned}}</span>
+                {{if .Data.Stat.OrphanedKnown}}
+                    <span class="font-semibold text-gray-900">{{.Data.Stat.Orphaned}}</span>
+                {{else}}
+                    <span class="text-gray-400" title="Orphaned is available in diagnostics">diag</span>
+                {{end}}
             </div>
             <div class="flex items-center justify-between rounded-md bg-slate-50 px-2 py-1">
                 <span class="text-slate-700">Paused</span>
@@ -644,6 +799,12 @@ const queueDetailTmpl = `
         </div>
     </div>
 </div>
+</div>
+`
+
+const queueDetailTmpl = `
+<div id="queue-detail">
+{{.Data.SummaryHTML}}
 
 <table class="min-w-full divide-y divide-gray-200 mb-8">
     <thead class="bg-gray-50">
@@ -701,7 +862,13 @@ const queueDetailTmpl = `
         </tr>
         <tr>
             <td class="px-6 py-4 text-sm text-gray-700 font-semibold">👻 Orphaned</td>
-            <td class="px-6 py-4 text-sm text-center"><span class="px-2 py-1 rounded text-xs bg-gray-200 text-gray-700">{{.Data.Stat.Orphaned}}</span></td>
+            <td class="px-6 py-4 text-sm text-center">
+                {{if .Data.Stat.OrphanedKnown}}
+                    <span class="px-2 py-1 rounded text-xs bg-gray-200 text-gray-700">{{.Data.Stat.Orphaned}}</span>
+                {{else}}
+                    <span class="px-2 py-1 rounded text-xs bg-gray-100 text-gray-500">diag</span>
+                {{end}}
+            </td>
             <td class="px-6 py-4 text-sm text-gray-600">—</td>
         </tr>
         <tr>
@@ -908,6 +1075,5 @@ const queueDetailTmpl = `
         </table>
     </div>
     {{end}}
-</div>
 </div>
 `

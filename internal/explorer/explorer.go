@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -22,7 +23,7 @@ func New(client *redis.Client) *Explorer {
 // DiscoverQueues finds all BullMQ queues by looking for the ":id" suffix
 func (e *Explorer) DiscoverQueues(ctx context.Context, prefix string) ([]string, error) {
 	var cursor uint64
-	var queues []string
+	seen := make(map[string]struct{})
 
 	// Default prefix is usually "bull"
 	pattern := prefix + ":*:id"
@@ -34,11 +35,15 @@ func (e *Explorer) DiscoverQueues(ctx context.Context, prefix string) ([]string,
 		}
 
 		for _, key := range keys {
-			// Key format: "bull:my-queue-name:id"
-			parts := strings.Split(key, ":")
-			if len(parts) >= 3 {
-				queues = append(queues, parts[1])
+			queueName, ok := strings.CutPrefix(key, prefix+":")
+			if !ok {
+				continue
 			}
+			queueName, ok = strings.CutSuffix(queueName, ":id")
+			if !ok || queueName == "" {
+				continue
+			}
+			seen[queueName] = struct{}{}
 		}
 
 		cursor = nextCursor
@@ -48,9 +53,11 @@ func (e *Explorer) DiscoverQueues(ctx context.Context, prefix string) ([]string,
 	}
 
 	// Ensure we never return nil slice, return empty slice instead
-	if queues == nil {
-		queues = make([]string, 0)
+	queues := make([]string, 0, len(seen))
+	for queue := range seen {
+		queues = append(queues, queue)
 	}
+	sort.Strings(queues)
 	return queues, nil
 }
 
@@ -66,6 +73,7 @@ type QueueStats struct {
 	Delayed         int64
 	Stalled         int64
 	Orphaned        int64
+	OrphanedKnown   bool
 	Total           int64
 }
 
@@ -237,27 +245,143 @@ func (e *Explorer) GetQueueStats(ctx context.Context, queues []string) ([]QueueS
 			Delayed:         delayedCard,
 			Stalled:         stalledCard,
 			Orphaned:        orphanedCount,
+			OrphanedKnown:   true,
 			Total:           waitLen + activeLen + pausedLen + prioritizedLen + waitingChildrenLen + failedCard + completedCard + delayedCard + stalledCard + orphanedCount,
 		}
 		stats = append(stats, stat)
 
-		// Update Prometheus metrics
-		metrics.QueueWaiting.WithLabelValues(q).Set(float64(stat.Wait))
-		metrics.QueueActive.WithLabelValues(q).Set(float64(stat.Active))
-		metrics.QueuePaused.WithLabelValues(q).Set(float64(stat.Paused))
-		metrics.QueuePrioritized.WithLabelValues(q).Set(float64(stat.Prioritized))
-		metrics.QueueWaitingChildren.WithLabelValues(q).Set(float64(stat.WaitingChildren))
-		metrics.QueueFailed.WithLabelValues(q).Set(float64(stat.Failed))
-		metrics.QueueCompleted.WithLabelValues(q).Set(float64(stat.Completed))
-		metrics.QueueDelayed.WithLabelValues(q).Set(float64(stat.Delayed))
-		metrics.QueueStalled.WithLabelValues(q).Set(float64(stat.Stalled))
-		metrics.QueueOrphaned.WithLabelValues(q).Set(float64(stat.Orphaned))
+		updateQueueMetrics(stat)
 	}
 
 	// Ensure we never return nil slice, return empty slice instead
 	if stats == nil {
 		stats = make([]QueueStats, 0)
 	}
+	return stats, nil
+}
+
+// Ping verifies Redis/Valkey connectivity with a cheap readiness-safe command.
+func (e *Explorer) Ping(ctx context.Context) error {
+	start := time.Now()
+	defer func() {
+		metrics.RedisOperationDuration.WithLabelValues("ping").Observe(time.Since(start).Seconds())
+	}()
+
+	if err := e.client.Ping(ctx).Err(); err != nil {
+		metrics.RedisOperationErrors.WithLabelValues("ping").Inc()
+		return err
+	}
+	return nil
+}
+
+// GetQueueStatsFast returns queue counts using only cheap cardinality operations.
+func (e *Explorer) GetQueueStatsFast(ctx context.Context, queuePrefix string, queues []string) ([]QueueStats, error) {
+	start := time.Now()
+	defer func() {
+		metrics.RedisOperationDuration.WithLabelValues("get_queue_stats_fast").Observe(time.Since(start).Seconds())
+	}()
+
+	if len(queues) == 0 {
+		return make([]QueueStats, 0), nil
+	}
+
+	type queueCommands struct {
+		wait            *redis.IntCmd
+		active          *redis.IntCmd
+		paused          *redis.IntCmd
+		prioritized     *redis.IntCmd
+		waitingChildren *redis.IntCmd
+		failed          *redis.IntCmd
+		completed       *redis.IntCmd
+		delayed         *redis.IntCmd
+		stalled         *redis.IntCmd
+	}
+
+	cmds := make([]queueCommands, len(queues))
+	pipe := e.client.Pipeline()
+	for i, q := range queues {
+		prefix := fmt.Sprintf("%s:%s", queuePrefix, q)
+		cmds[i] = queueCommands{
+			wait:            pipe.LLen(ctx, prefix+":wait"),
+			active:          pipe.LLen(ctx, prefix+":active"),
+			paused:          pipe.LLen(ctx, prefix+":paused"),
+			prioritized:     pipe.ZCard(ctx, prefix+":prioritized"),
+			waitingChildren: pipe.ZCard(ctx, prefix+":waiting-children"),
+			failed:          pipe.ZCard(ctx, prefix+":failed"),
+			completed:       pipe.ZCard(ctx, prefix+":completed"),
+			delayed:         pipe.ZCard(ctx, prefix+":delayed"),
+			stalled:         pipe.ZCard(ctx, prefix+":stalled"),
+		}
+	}
+
+	_, _ = pipe.Exec(ctx)
+
+	stats := make([]QueueStats, 0, len(queues))
+	for i, q := range queues {
+		waitLen, err := intCmdValue(cmds[i].wait)
+		if err != nil {
+			metrics.RedisOperationErrors.WithLabelValues("get_queue_stats_fast").Inc()
+			return nil, err
+		}
+		activeLen, err := intCmdValue(cmds[i].active)
+		if err != nil {
+			metrics.RedisOperationErrors.WithLabelValues("get_queue_stats_fast").Inc()
+			return nil, err
+		}
+		pausedLen, err := intCmdValue(cmds[i].paused)
+		if err != nil {
+			metrics.RedisOperationErrors.WithLabelValues("get_queue_stats_fast").Inc()
+			return nil, err
+		}
+		prioritizedLen, err := intCmdValue(cmds[i].prioritized)
+		if err != nil {
+			metrics.RedisOperationErrors.WithLabelValues("get_queue_stats_fast").Inc()
+			return nil, err
+		}
+		waitingChildrenLen, err := intCmdValue(cmds[i].waitingChildren)
+		if err != nil {
+			metrics.RedisOperationErrors.WithLabelValues("get_queue_stats_fast").Inc()
+			return nil, err
+		}
+		failedLen, err := intCmdValue(cmds[i].failed)
+		if err != nil {
+			metrics.RedisOperationErrors.WithLabelValues("get_queue_stats_fast").Inc()
+			return nil, err
+		}
+		completedLen, err := intCmdValue(cmds[i].completed)
+		if err != nil {
+			metrics.RedisOperationErrors.WithLabelValues("get_queue_stats_fast").Inc()
+			return nil, err
+		}
+		delayedLen, err := intCmdValue(cmds[i].delayed)
+		if err != nil {
+			metrics.RedisOperationErrors.WithLabelValues("get_queue_stats_fast").Inc()
+			return nil, err
+		}
+		stalledLen, err := intCmdValue(cmds[i].stalled)
+		if err != nil {
+			metrics.RedisOperationErrors.WithLabelValues("get_queue_stats_fast").Inc()
+			return nil, err
+		}
+
+		stat := QueueStats{
+			Name:            q,
+			Wait:            waitLen,
+			Active:          activeLen,
+			Paused:          pausedLen,
+			Prioritized:     prioritizedLen,
+			WaitingChildren: waitingChildrenLen,
+			Failed:          failedLen,
+			Completed:       completedLen,
+			Delayed:         delayedLen,
+			Stalled:         stalledLen,
+			OrphanedKnown:   false,
+			Total:           waitLen + activeLen + pausedLen + prioritizedLen + waitingChildrenLen + failedLen + completedLen + delayedLen + stalledLen,
+		}
+		stats = append(stats, stat)
+		updateQueueMetrics(stat)
+	}
+
 	return stats, nil
 }
 
@@ -401,33 +525,47 @@ func (e *Explorer) determineJobState(ctx context.Context, queueName, jobID strin
 
 // GetJobsByState retrieves jobs in a specific state (waiting, active, failed, etc.)
 func (e *Explorer) GetJobsByState(ctx context.Context, queueName, state string, limit int) ([]JobSummary, error) {
+	return e.GetJobsByStatePage(ctx, queueName, state, 0, limit)
+}
+
+// GetJobsByStatePage retrieves jobs in a specific state with offset/limit pagination.
+func (e *Explorer) GetJobsByStatePage(ctx context.Context, queueName, state string, offset, limit int) ([]JobSummary, error) {
 	start := time.Now()
 	defer func() {
 		metrics.RedisOperationDuration.WithLabelValues("get_jobs_by_state").Observe(time.Since(start).Seconds())
 	}()
 
+	if limit <= 0 {
+		return make([]JobSummary, 0), nil
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
 	prefix := fmt.Sprintf("bull:%s", queueName)
 	var jobIDs []string
 	var err error
+	startIdx := int64(offset)
+	endIdx := int64(offset + limit - 1)
 
 	switch state {
 	case "waiting":
-		jobIDs, err = e.client.LRange(ctx, prefix+":wait", 0, int64(limit-1)).Result()
+		jobIDs, err = e.client.LRange(ctx, prefix+":wait", startIdx, endIdx).Result()
 	case "active":
-		jobIDs, err = e.client.LRange(ctx, prefix+":active", 0, int64(limit-1)).Result()
+		jobIDs, err = e.client.LRange(ctx, prefix+":active", startIdx, endIdx).Result()
 	case "paused":
-		jobIDs, err = e.client.LRange(ctx, prefix+":paused", 0, int64(limit-1)).Result()
+		jobIDs, err = e.client.LRange(ctx, prefix+":paused", startIdx, endIdx).Result()
 	case "prioritized":
-		jobIDs, err = e.client.ZRange(ctx, prefix+":prioritized", 0, int64(limit-1)).Result()
+		jobIDs, err = e.client.ZRange(ctx, prefix+":prioritized", startIdx, endIdx).Result()
 	case "waiting-children":
-		jobIDs, err = e.client.ZRange(ctx, prefix+":waiting-children", 0, int64(limit-1)).Result()
+		jobIDs, err = e.client.ZRange(ctx, prefix+":waiting-children", startIdx, endIdx).Result()
 	case "failed":
-		jobIDs, err = e.client.ZRange(ctx, prefix+":failed", 0, int64(limit-1)).Result()
+		jobIDs, err = e.client.ZRange(ctx, prefix+":failed", startIdx, endIdx).Result()
 	case "completed":
-		jobIDs, err = e.client.ZRange(ctx, prefix+":completed", 0, int64(limit-1)).Result()
+		jobIDs, err = e.client.ZRange(ctx, prefix+":completed", startIdx, endIdx).Result()
 	case "delayed":
 		// For delayed jobs, we get them from the sorted set
-		results, err := e.client.ZRangeWithScores(ctx, prefix+":delayed", 0, int64(limit-1)).Result()
+		results, err := e.client.ZRangeWithScores(ctx, prefix+":delayed", startIdx, endIdx).Result()
 		if err != nil {
 			metrics.RedisOperationErrors.WithLabelValues("get_jobs_by_state").Inc()
 			return nil, err
@@ -438,7 +576,7 @@ func (e *Explorer) GetJobsByState(ctx context.Context, queueName, state string, 
 			}
 		}
 	case "stalled":
-		jobIDs, err = e.client.ZRange(ctx, prefix+":stalled", 0, int64(limit-1)).Result()
+		jobIDs, err = e.client.ZRange(ctx, prefix+":stalled", startIdx, endIdx).Result()
 	default:
 		return nil, fmt.Errorf("unknown state: %s", state)
 	}
@@ -448,47 +586,16 @@ func (e *Explorer) GetJobsByState(ctx context.Context, queueName, state string, 
 		return nil, err
 	}
 
-	// Fetch basic info for each job
-	var summaries []JobSummary
-	for _, jobID := range jobIDs {
-		job, err := e.GetJob(ctx, queueName, jobID)
-		if err != nil {
-			continue // Skip jobs that can't be loaded
-		}
-		summaryState := state
-		if job.State != "" && job.State != "unknown" {
-			summaryState = job.State
-		}
-		dataStr := ""
-		if job.Data != nil {
-			if b, err := json.Marshal(job.Data); err == nil {
-				dataStr = string(b)
-			}
-		}
-		optsStr := ""
-		if job.Opts != nil {
-			if b, err := json.Marshal(job.Opts); err == nil {
-				optsStr = string(b)
-			}
-		}
-		summaries = append(summaries, JobSummary{
-			ID:           job.ID,
-			Name:         job.Name,
-			State:        summaryState,
-			Queue:        queueName,
-			Timestamp:    time.Unix(job.Timestamp/1000, 0),
-			AttemptsMade: job.AttemptsMade,
-			Data:         dataStr,
-			Opts:         optsStr,
-			FailedReason: job.FailedReason,
-		})
-	}
-
-	return summaries, nil
+	return e.loadJobSummaries(ctx, queueName, state, jobIDs)
 }
 
 // GetJobsAcrossStates retrieves jobs from all known states for a queue.
 func (e *Explorer) GetJobsAcrossStates(ctx context.Context, queueName string, limitPerState int) ([]JobSummary, error) {
+	return e.GetJobsAcrossStatesPage(ctx, queueName, 0, limitPerState)
+}
+
+// GetJobsAcrossStatesPage retrieves jobs from all known states for a queue with offset/limit pagination per state.
+func (e *Explorer) GetJobsAcrossStatesPage(ctx context.Context, queueName string, offsetPerState, limitPerState int) ([]JobSummary, error) {
 	states := []string{
 		"waiting",
 		"active",
@@ -504,7 +611,7 @@ func (e *Explorer) GetJobsAcrossStates(ctx context.Context, queueName string, li
 	seen := make(map[string]bool)
 	var summaries []JobSummary
 	for _, state := range states {
-		jobs, err := e.GetJobsByState(ctx, queueName, state, limitPerState)
+		jobs, err := e.GetJobsByStatePage(ctx, queueName, state, offsetPerState, limitPerState)
 		if err != nil {
 			return nil, err
 		}
@@ -518,4 +625,111 @@ func (e *Explorer) GetJobsAcrossStates(ctx context.Context, queueName string, li
 	}
 
 	return summaries, nil
+}
+
+func intCmdValue(cmd *redis.IntCmd) (int64, error) {
+	if err := cmd.Err(); err != nil && !isBenignCountError(err) {
+		return 0, err
+	}
+	return cmd.Val(), nil
+}
+
+func isBenignCountError(err error) bool {
+	if err == nil || err == redis.Nil {
+		return true
+	}
+	return strings.Contains(err.Error(), "WRONGTYPE")
+}
+
+func updateQueueMetrics(stat QueueStats) {
+	metrics.QueueWaiting.WithLabelValues(stat.Name).Set(float64(stat.Wait))
+	metrics.QueueActive.WithLabelValues(stat.Name).Set(float64(stat.Active))
+	metrics.QueuePaused.WithLabelValues(stat.Name).Set(float64(stat.Paused))
+	metrics.QueuePrioritized.WithLabelValues(stat.Name).Set(float64(stat.Prioritized))
+	metrics.QueueWaitingChildren.WithLabelValues(stat.Name).Set(float64(stat.WaitingChildren))
+	metrics.QueueFailed.WithLabelValues(stat.Name).Set(float64(stat.Failed))
+	metrics.QueueCompleted.WithLabelValues(stat.Name).Set(float64(stat.Completed))
+	metrics.QueueDelayed.WithLabelValues(stat.Name).Set(float64(stat.Delayed))
+	metrics.QueueStalled.WithLabelValues(stat.Name).Set(float64(stat.Stalled))
+	if stat.OrphanedKnown {
+		metrics.QueueOrphaned.WithLabelValues(stat.Name).Set(float64(stat.Orphaned))
+	}
+}
+
+func (e *Explorer) loadJobSummaries(ctx context.Context, queueName, state string, jobIDs []string) ([]JobSummary, error) {
+	if len(jobIDs) == 0 {
+		return make([]JobSummary, 0), nil
+	}
+
+	pipe := e.client.Pipeline()
+	cmds := make([]*redis.MapStringStringCmd, 0, len(jobIDs))
+	for _, jobID := range jobIDs {
+		key := fmt.Sprintf("bull:%s:%s", queueName, jobID)
+		cmds = append(cmds, pipe.HGetAll(ctx, key))
+	}
+
+	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
+		metrics.RedisOperationErrors.WithLabelValues("get_jobs_by_state").Inc()
+		return nil, err
+	}
+
+	summaries := make([]JobSummary, 0, len(jobIDs))
+	for idx, cmd := range cmds {
+		if err := cmd.Err(); err != nil && err != redis.Nil {
+			continue
+		}
+
+		data := cmd.Val()
+		if len(data) == 0 {
+			continue
+		}
+
+		jobID := jobIDs[idx]
+		summary := JobSummary{
+			ID:    jobID,
+			Name:  data["name"],
+			State: state,
+			Queue: queueName,
+		}
+
+		if timestamp := data["timestamp"]; timestamp != "" {
+			var ts int64
+			if _, err := fmt.Sscanf(timestamp, "%d", &ts); err == nil && ts > 0 {
+				summary.Timestamp = time.Unix(ts/1000, 0)
+			}
+		}
+		if attemptsMade := data["attemptsMade"]; attemptsMade != "" {
+			_, _ = fmt.Sscanf(attemptsMade, "%d", &summary.AttemptsMade)
+		}
+		if failedReason, ok := data["failedReason"]; ok {
+			summary.FailedReason = failedReason
+		}
+		if dataStr, ok := data["data"]; ok {
+			summary.Data = compactJSON(dataStr)
+		}
+		if optsStr, ok := data["opts"]; ok {
+			summary.Opts = compactJSON(optsStr)
+		}
+
+		summaries = append(summaries, summary)
+	}
+
+	return summaries, nil
+}
+
+func compactJSON(raw string) string {
+	if raw == "" {
+		return ""
+	}
+
+	var decoded any
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return raw
+	}
+
+	encoded, err := json.Marshal(decoded)
+	if err != nil {
+		return raw
+	}
+	return string(encoded)
 }

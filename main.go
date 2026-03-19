@@ -52,6 +52,8 @@ func normalizePath(path string) (string, bool) {
 		return "/queues", true
 	case path == "/queue/jobs":
 		return "/queue/jobs", true
+	case path == "/queue/summary":
+		return "/queue/summary", true
 	case strings.HasPrefix(path, "/queue/"):
 		return "/queue/:name", true
 	case path == "/job/detail":
@@ -95,6 +97,7 @@ func main() {
 	log.Println("✅ Connected to Redis/Valkey")
 
 	exp := explorer.New(rdb)
+	dashboardCache := web.NewDashboardCache()
 
 	// 3. Setup HTTP routes
 	mux := http.NewServeMux()
@@ -102,11 +105,12 @@ func main() {
 	// Main dashboard
 	mux.HandleFunc("/", web.HomeHandler())
 
-	mux.HandleFunc("/queues", web.DashboardHandler(exp, cfg.QueuePrefix))
+	mux.HandleFunc("/queues", web.DashboardHandler(exp, cfg.QueuePrefix, dashboardCache))
 	mux.HandleFunc("/queue/jobs", web.JobListHandler(exp))
-	mux.HandleFunc("/queue/", web.QueueDetailHandler(exp))
+	mux.HandleFunc("/queue/summary", web.QueueSummaryHandler(exp, cfg.QueuePrefix))
+	mux.HandleFunc("/queue/", web.QueueDetailHandler(exp, cfg.QueuePrefix))
 	mux.HandleFunc("/job/detail", web.JobDetailHandler(exp))
-	mux.HandleFunc("/search", web.SearchPageHandler(exp, cfg.QueuePrefix))
+	mux.HandleFunc("/search", web.SearchPageHandler(exp, cfg.QueuePrefix, dashboardCache))
 
 	// Health checks (K8s friendly)
 	mux.HandleFunc("/health", web.HealthHandler())
@@ -118,6 +122,10 @@ func main() {
 	mux.Handle("/metrics", promhttp.Handler())
 
 	// Background queue stats poller for metrics freshness
+	if err := refreshDashboardSnapshot(exp, cfg.QueuePrefix, dashboardCache); err != nil {
+		log.Printf("⚠️ initial dashboard snapshot refresh error: %v", err)
+	}
+
 	stopMetrics := make(chan struct{})
 	go func() {
 		pollSeconds := cfg.MetricsPollSeconds
@@ -129,13 +137,8 @@ func main() {
 		for {
 			select {
 			case <-ticker.C:
-				queues, err := exp.DiscoverQueues(context.Background(), cfg.QueuePrefix)
-				if err != nil {
-					log.Printf("⚠️ DiscoverQueues (metrics poller) error: %v", err)
-					continue
-				}
-				if _, err := exp.GetQueueStats(context.Background(), queues); err != nil {
-					log.Printf("⚠️ GetQueueStats (metrics poller) error: %v", err)
+				if err := refreshDashboardSnapshot(exp, cfg.QueuePrefix, dashboardCache); err != nil {
+					log.Printf("⚠️ dashboard snapshot refresh error: %v", err)
 				}
 			case <-stopMetrics:
 				return
@@ -175,6 +178,24 @@ func main() {
 	}
 
 	log.Println("👋 Server exited")
+}
+
+func refreshDashboardSnapshot(exp *explorer.Explorer, queuePrefix string, cache *web.DashboardCache) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	queues, err := exp.DiscoverQueues(ctx, queuePrefix)
+	if err != nil {
+		return err
+	}
+
+	stats, err := exp.GetQueueStatsFast(ctx, queuePrefix, queues)
+	if err != nil {
+		return err
+	}
+
+	cache.Set(queues, stats, time.Now())
+	return nil
 }
 
 func newRedisClient(cfg *config.Config) *redis.Client {
