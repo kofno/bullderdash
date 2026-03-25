@@ -7,6 +7,11 @@ vars:
   QUEUES: orders,emails,billing
 
 tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+
   up:
     desc: Start the local development environment
     cmds:
@@ -45,6 +50,11 @@ tasks:
     desc: Build the Bull-der-dash dashboard binary
     cmds:
       - go build -o bullderdash.exe .
+
+  test:
+    desc: Run the Go test suite
+    cmds:
+      - go test ./...
 
   build-cli:
     desc: Build the Redis/Valkey CLI helper binary

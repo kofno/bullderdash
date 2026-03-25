@@ -76,8 +76,8 @@ func main() {
 	if cfg.RedisSentinelMaster != "" && len(cfg.RedisSentinelAddrs) > 0 {
 		redisMode = "sentinel"
 	}
-	log.Printf("🔧 Starting Bull-der-dash with config: RedisMode=%s, Redis=%s, Port=%s, Prefix=%s, MetricsPoll=%ds",
-		redisMode, cfg.RedisAddr, cfg.ServerPort, cfg.QueuePrefix, cfg.MetricsPollSeconds)
+	log.Printf("🔧 Starting Bull-der-dash with config: RedisMode=%s, Redis=%s, Port=%s, Prefix=%s, MetricsPoll=%ds, DashboardRefreshTimeout=%ds",
+		redisMode, cfg.RedisAddr, cfg.ServerPort, cfg.QueuePrefix, cfg.MetricsPollSeconds, cfg.DashboardRefreshTimeoutSeconds)
 
 	// 2. Setup Redis/Valkey client
 	rdb := newRedisClient(cfg)
@@ -122,7 +122,7 @@ func main() {
 	mux.Handle("/metrics", promhttp.Handler())
 
 	// Background queue stats poller for metrics freshness
-	if err := refreshDashboardSnapshot(exp, cfg.QueuePrefix, dashboardCache); err != nil {
+	if err := refreshDashboardSnapshot(exp, cfg.QueuePrefix, cfg.DashboardRefreshTimeoutSeconds, dashboardCache); err != nil {
 		log.Printf("⚠️ initial dashboard snapshot refresh error: %v", err)
 	}
 
@@ -137,8 +137,13 @@ func main() {
 		for {
 			select {
 			case <-ticker.C:
-				if err := refreshDashboardSnapshot(exp, cfg.QueuePrefix, dashboardCache); err != nil {
-					log.Printf("⚠️ dashboard snapshot refresh error: %v", err)
+				if err := refreshDashboardSnapshot(exp, cfg.QueuePrefix, cfg.DashboardRefreshTimeoutSeconds, dashboardCache); err != nil {
+					snapshot := dashboardCache.Get()
+					if snapshot.UpdatedAt.IsZero() {
+						log.Printf("⚠️ dashboard snapshot refresh error: %v (no cached snapshot available)", err)
+						continue
+					}
+					log.Printf("⚠️ dashboard snapshot refresh error: %v (serving cached snapshot age=%s)", err, time.Since(snapshot.UpdatedAt).Round(time.Second))
 				}
 			case <-stopMetrics:
 				return
@@ -180,22 +185,15 @@ func main() {
 	log.Println("👋 Server exited")
 }
 
-func refreshDashboardSnapshot(exp *explorer.Explorer, queuePrefix string, cache *web.DashboardCache) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+func refreshDashboardSnapshot(exp *explorer.Explorer, queuePrefix string, timeoutSeconds int, cache *web.DashboardCache) error {
+	if timeoutSeconds < 1 {
+		timeoutSeconds = 1
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
 
-	queues, err := exp.DiscoverQueues(ctx, queuePrefix)
-	if err != nil {
-		return err
-	}
-
-	stats, err := exp.GetQueueStatsFast(ctx, queuePrefix, queues)
-	if err != nil {
-		return err
-	}
-
-	cache.Set(queues, stats, time.Now())
-	return nil
+	return web.RefreshDashboardCache(ctx, exp, queuePrefix, cache)
 }
 
 func newRedisClient(cfg *config.Config) *redis.Client {

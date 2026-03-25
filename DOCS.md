@@ -64,6 +64,7 @@ Environment variables:
 - `SERVER_PORT` (default `8080`)
 - `QUEUE_PREFIX` (default `bull`)
 - `METRICS_POLL_SECONDS` (default `10`)
+- `DASHBOARD_REFRESH_TIMEOUT_SECONDS` (default `30`)
 - `LOG_LEVEL` (default `info`)
 
 ## Simulator Notes

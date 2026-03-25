@@ -49,6 +49,7 @@ env:
       key: ""
   queuePrefix: "bull"
   metricsPollSeconds: 10
+  dashboardRefreshTimeoutSeconds: 30
   logLevel: "info"
 
 extraEnv: []
@@ -80,3 +81,4 @@ readinessProbe:
   periodSeconds: 10
   timeoutSeconds: 5
   failureThreshold: 3
+

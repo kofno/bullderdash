@@ -66,6 +66,7 @@ export REDIS_SENTINEL_PASSWORD=
 export SERVER_PORT=8080
 export QUEUE_PREFIX=bull
 export METRICS_POLL_SECONDS=10
+export DASHBOARD_REFRESH_TIMEOUT_SECONDS=30
 export LOG_LEVEL=info
 
 # Build and run
@@ -115,6 +116,7 @@ All configuration is done via environment variables:
 | `SERVER_PORT` | `8080` | HTTP server port |
 | `QUEUE_PREFIX` | `bull` | BullMQ queue prefix in Redis |
 | `METRICS_POLL_SECONDS` | `10` | Background queue stats refresh interval (seconds) |
+| `DASHBOARD_REFRESH_TIMEOUT_SECONDS` | `30` | Deadline for each dashboard snapshot refresh |
 | `LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
 
 Sentinel behavior:

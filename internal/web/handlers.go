@@ -124,7 +124,7 @@ func DashboardHandler(exp *explorer.Explorer, prefix string, cache *DashboardCac
 	return func(w http.ResponseWriter, r *http.Request) {
 		snapshot := cache.Get()
 		if len(snapshot.Stats) == 0 {
-			if err := refreshDashboardCache(r.Context(), exp, prefix, cache); err != nil {
+			if err := RefreshDashboardCache(r.Context(), exp, prefix, cache); err != nil {
 				log.Printf("❌ dashboard snapshot refresh error: %v", err)
 				http.Error(w, fmt.Sprintf("Dashboard snapshot unavailable: %v", err), http.StatusServiceUnavailable)
 				return
@@ -572,7 +572,7 @@ func SearchPageHandler(exp *explorer.Explorer, prefix string, cache *DashboardCa
 		snapshot := cache.Get()
 		queues := snapshot.Queues
 		if len(queues) == 0 {
-			if err := refreshDashboardCache(r.Context(), exp, prefix, cache); err != nil {
+			if err := RefreshDashboardCache(r.Context(), exp, prefix, cache); err != nil {
 				log.Printf("❌ DiscoverQueues error (search): %v", err)
 				http.Error(w, fmt.Sprintf("DiscoverQueues error: %v", err), http.StatusInternalServerError)
 				return
@@ -600,21 +600,6 @@ func SearchPageHandler(exp *explorer.Explorer, prefix string, cache *DashboardCa
 			return
 		}
 	}
-}
-
-func refreshDashboardCache(ctx context.Context, exp *explorer.Explorer, prefix string, cache *DashboardCache) error {
-	queues, err := exp.DiscoverQueues(ctx, prefix)
-	if err != nil {
-		return err
-	}
-
-	stats, err := exp.GetQueueStatsFast(ctx, prefix, queues)
-	if err != nil {
-		return err
-	}
-
-	cache.Set(queues, stats, time.Now())
-	return nil
 }
 
 type queueDetailPageData struct {

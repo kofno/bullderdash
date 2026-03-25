@@ -86,6 +86,8 @@ spec:
               value: {{ .Values.env.queuePrefix | quote }}
             - name: METRICS_POLL_SECONDS
               value: {{ .Values.env.metricsPollSeconds | quote }}
+            - name: DASHBOARD_REFRESH_TIMEOUT_SECONDS
+              value: {{ .Values.env.dashboardRefreshTimeoutSeconds | quote }}
             - name: LOG_LEVEL
               value: {{ .Values.env.logLevel | quote }}
             {{- with .Values.extraEnv }}
@@ -122,3 +124,4 @@ spec:
             failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+

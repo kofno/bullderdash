@@ -24,12 +24,13 @@ func New(client *redis.Client) *Explorer {
 func (e *Explorer) DiscoverQueues(ctx context.Context, prefix string) ([]string, error) {
 	var cursor uint64
 	seen := make(map[string]struct{})
+	const scanCount = 100
 
 	// Default prefix is usually "bull"
 	pattern := prefix + ":*:id"
 
 	for {
-		keys, nextCursor, err := e.client.Scan(ctx, cursor, pattern, 10).Result()
+		keys, nextCursor, err := e.client.Scan(ctx, cursor, pattern, scanCount).Result()
 		if err != nil {
 			return nil, err
 		}

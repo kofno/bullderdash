@@ -8,35 +8,37 @@ import (
 
 // Config holds application configuration
 type Config struct {
-	RedisAddr             string
-	RedisUsername         string
-	RedisPassword         string
-	RedisDB               int
-	RedisSentinelMaster   string
-	RedisSentinelAddrs    []string
-	RedisSentinelUsername string
-	RedisSentinelPassword string
-	ServerPort            string
-	QueuePrefix           string
-	MetricsPollSeconds    int
-	LogLevel              string
+	RedisAddr                      string
+	RedisUsername                  string
+	RedisPassword                  string
+	RedisDB                        int
+	RedisSentinelMaster            string
+	RedisSentinelAddrs             []string
+	RedisSentinelUsername          string
+	RedisSentinelPassword          string
+	ServerPort                     string
+	QueuePrefix                    string
+	MetricsPollSeconds             int
+	DashboardRefreshTimeoutSeconds int
+	LogLevel                       string
 }
 
 // Load reads configuration from environment variables with sensible defaults
 func Load() *Config {
 	return &Config{
-		RedisAddr:             getEnv("REDIS_ADDR", "127.0.0.1:6379"),
-		RedisUsername:         getEnv("REDIS_USERNAME", ""),
-		RedisPassword:         getEnv("REDIS_PASSWORD", ""),
-		RedisDB:               getEnvInt("REDIS_DB", 0),
-		RedisSentinelMaster:   getEnv("REDIS_SENTINEL_MASTER", ""),
-		RedisSentinelAddrs:    getEnvList("REDIS_SENTINEL_ADDRS"),
-		RedisSentinelUsername: getEnv("REDIS_SENTINEL_USERNAME", ""),
-		RedisSentinelPassword: getEnv("REDIS_SENTINEL_PASSWORD", ""),
-		ServerPort:            getEnv("SERVER_PORT", "8080"),
-		QueuePrefix:           getEnv("QUEUE_PREFIX", "bull"),
-		MetricsPollSeconds:    getEnvInt("METRICS_POLL_SECONDS", 10),
-		LogLevel:              getEnv("LOG_LEVEL", "info"),
+		RedisAddr:                      getEnv("REDIS_ADDR", "127.0.0.1:6379"),
+		RedisUsername:                  getEnv("REDIS_USERNAME", ""),
+		RedisPassword:                  getEnv("REDIS_PASSWORD", ""),
+		RedisDB:                        getEnvInt("REDIS_DB", 0),
+		RedisSentinelMaster:            getEnv("REDIS_SENTINEL_MASTER", ""),
+		RedisSentinelAddrs:             getEnvList("REDIS_SENTINEL_ADDRS"),
+		RedisSentinelUsername:          getEnv("REDIS_SENTINEL_USERNAME", ""),
+		RedisSentinelPassword:          getEnv("REDIS_SENTINEL_PASSWORD", ""),
+		ServerPort:                     getEnv("SERVER_PORT", "8080"),
+		QueuePrefix:                    getEnv("QUEUE_PREFIX", "bull"),
+		MetricsPollSeconds:             getEnvInt("METRICS_POLL_SECONDS", 10),
+		DashboardRefreshTimeoutSeconds: getEnvInt("DASHBOARD_REFRESH_TIMEOUT_SECONDS", 30),
+		LogLevel:                       getEnv("LOG_LEVEL", "info"),
 	}
 }
 
