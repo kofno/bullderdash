@@ -146,9 +146,8 @@ func DashboardHandler(exp *explorer.Explorer, prefix string, cache *DashboardCac
 func JobListHandler(exp *explorer.Explorer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		const (
-			statePageSize      = 100
-			allStatesPageSize  = 50
-			searchScanPerState = 100
+			statePageSize     = 100
+			allStatesPageSize = 50
 		)
 
 		queueName := r.URL.Query().Get("queue")
@@ -161,9 +160,12 @@ func JobListHandler(exp *explorer.Explorer) http.HandlerFunc {
 
 		displayState := state
 		page := parsePositiveInt(r.URL.Query().Get("page"), 1)
+		searchWindowValue := r.URL.Query().Get("since")
+		window := parseSearchWindow(searchWindowValue, time.Now())
 		offset := 0
 		limit := statePageSize
 		searchedJobs := 0
+		hasNextPage := false
 		windowLabel := ""
 		var jobs []explorer.JobSummary
 		var err error
@@ -171,11 +173,12 @@ func JobListHandler(exp *explorer.Explorer) http.HandlerFunc {
 		switch {
 		case query != "":
 			displayState = "all"
-			limit = searchScanPerState
-			offset = (page - 1) * searchScanPerState
-			jobs, err = exp.GetJobsAcrossStatesPage(r.Context(), queueName, offset, limit)
-			searchedJobs = len(jobs)
-			windowLabel = fmt.Sprintf("Search window: jobs %d-%d from each state", offset+1, offset+limit)
+			var results searchResults
+			results, err = searchJobsAcrossStates(r.Context(), exp, queueName, query, page, window)
+			jobs = results.Jobs
+			searchedJobs = results.SearchedJobs
+			windowLabel = results.WindowLabel
+			hasNextPage = results.HasNextPage
 		case state == "all":
 			displayState = "all"
 			limit = allStatesPageSize
@@ -183,51 +186,43 @@ func JobListHandler(exp *explorer.Explorer) http.HandlerFunc {
 			jobs, err = exp.GetJobsAcrossStatesPage(r.Context(), queueName, offset, limit)
 			searchedJobs = len(jobs)
 			windowLabel = fmt.Sprintf("Showing jobs %d-%d from each state", offset+1, offset+limit)
+			hasNextPage = len(jobs) == limit
 		default:
 			offset = (page - 1) * statePageSize
 			jobs, err = exp.GetJobsByStatePage(r.Context(), queueName, state, offset, limit)
 			searchedJobs = len(jobs)
 			windowLabel = fmt.Sprintf("Showing jobs %d-%d in %s", offset+1, offset+limit, state)
+			hasNextPage = len(jobs) == limit
 		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if query != "" {
-			queryLower := strings.ToLower(query)
-			filtered := jobs[:0]
-			for _, job := range jobs {
-				if strings.Contains(strings.ToLower(job.ID), queryLower) ||
-					strings.Contains(strings.ToLower(job.Name), queryLower) ||
-					strings.Contains(strings.ToLower(job.Data), queryLower) ||
-					strings.Contains(strings.ToLower(job.Opts), queryLower) ||
-					strings.Contains(strings.ToLower(job.FailedReason), queryLower) {
-					filtered = append(filtered, job)
-				}
-			}
-			jobs = filtered
-		}
 
 		data := struct {
-			Queue        string
-			State        string
-			Query        string
-			Jobs         []explorer.JobSummary
-			Page         int
-			HasPrevPage  bool
-			HasNextPage  bool
-			WindowLabel  string
-			SearchedJobs int
+			Queue         string
+			State         string
+			Query         string
+			SearchWindow  string
+			WindowOptions []searchWindowOption
+			Jobs          []explorer.JobSummary
+			Page          int
+			HasPrevPage   bool
+			HasNextPage   bool
+			WindowLabel   string
+			SearchedJobs  int
 		}{
-			Queue:        queueName,
-			State:        displayState,
-			Query:        query,
-			Jobs:         jobs,
-			Page:         page,
-			HasPrevPage:  page > 1,
-			HasNextPage:  len(jobs) == limit,
-			WindowLabel:  windowLabel,
-			SearchedJobs: searchedJobs,
+			Queue:         queueName,
+			State:         displayState,
+			Query:         query,
+			SearchWindow:  window.Value,
+			WindowOptions: searchWindowOptions,
+			Jobs:          jobs,
+			Page:          page,
+			HasPrevPage:   page > 1,
+			HasNextPage:   hasNextPage,
+			WindowLabel:   windowLabel,
+			SearchedJobs:  searchedJobs,
 		}
 
 		if r.Header.Get("HX-Request") != "" {
@@ -338,7 +333,7 @@ const jobListTmpl = `
         <input type="hidden" name="state" value="{{.Data.State}}">
         <label class="flex flex-col text-xs uppercase tracking-wide text-gray-400">
             Search Jobs
-            <span class="mt-1 text-[10px] normal-case text-gray-400">Searches a paged window across all states</span>
+            <span class="mt-1 text-[10px] normal-case text-gray-400">Searches across states with a bounded scan depth</span>
             <input
                 type="text"
                 name="q"
@@ -346,6 +341,17 @@ const jobListTmpl = `
                 placeholder="Job ID or name (all states)"
                 class="mt-1 w-64 rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             />
+        </label>
+        <label class="flex flex-col text-xs uppercase tracking-wide text-gray-400">
+            Time Window
+            <select
+                name="since"
+                class="mt-1 h-10 rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            >
+                {{range .Data.WindowOptions}}
+                <option value="{{.Value}}" {{if eq $.Data.SearchWindow .Value}}selected{{end}}>{{.Label}}</option>
+                {{end}}
+            </select>
         </label>
         <button
             type="submit"
@@ -416,7 +422,7 @@ const jobListTmpl = `
         <div class="flex items-center gap-3">
             {{if .Data.HasPrevPage}}
             <a
-                href="/queue/jobs?queue={{.Data.Queue}}&state={{.Data.State}}&q={{.Data.Query}}&page={{sub .Data.Page 1}}"
+                href="/queue/jobs?queue={{.Data.Queue}}&state={{.Data.State}}&q={{.Data.Query}}&since={{.Data.SearchWindow}}&page={{sub .Data.Page 1}}"
                 class="rounded-md border border-gray-300 px-3 py-2 font-medium text-gray-600 hover:text-gray-900"
             >
                 Previous
@@ -424,7 +430,7 @@ const jobListTmpl = `
             {{end}}
             {{if .Data.HasNextPage}}
             <a
-                href="/queue/jobs?queue={{.Data.Queue}}&state={{.Data.State}}&q={{.Data.Query}}&page={{add .Data.Page 1}}"
+                href="/queue/jobs?queue={{.Data.Queue}}&state={{.Data.State}}&q={{.Data.Query}}&since={{.Data.SearchWindow}}&page={{add .Data.Page 1}}"
                 class="rounded-md border border-gray-300 px-3 py-2 font-medium text-gray-600 hover:text-gray-900"
             >
                 Next
