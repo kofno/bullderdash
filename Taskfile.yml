@@ -43,6 +43,8 @@ tasks:
     env:
       REDIS_ADDR: "localhost:6379"
       BULLMQ_QUEUES: "{{.QUEUES}}"
+      WORKLOAD_METRICS_ENABLED: "true"
+      WORKLOAD_METRICS_START_ID: "$"
     cmds:
       - go run .
 

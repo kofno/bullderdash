@@ -20,6 +20,12 @@ type Config struct {
 	QueuePrefix                    string
 	MetricsPollSeconds             int
 	DashboardRefreshTimeoutSeconds int
+	WorkloadMetricsEnabled         bool
+	WorkloadMetricsPollSeconds     int
+	WorkloadMetricsBlockSeconds    int
+	WorkloadMetricsBatchSize       int
+	WorkloadMetricsMaxJobNames     int
+	WorkloadMetricsStartID         string
 	LogLevel                       string
 }
 
@@ -38,6 +44,12 @@ func Load() *Config {
 		QueuePrefix:                    getEnv("QUEUE_PREFIX", "bull"),
 		MetricsPollSeconds:             getEnvInt("METRICS_POLL_SECONDS", 10),
 		DashboardRefreshTimeoutSeconds: getEnvInt("DASHBOARD_REFRESH_TIMEOUT_SECONDS", 30),
+		WorkloadMetricsEnabled:         getEnvBool("WORKLOAD_METRICS_ENABLED", false),
+		WorkloadMetricsPollSeconds:     getEnvInt("WORKLOAD_METRICS_POLL_SECONDS", 10),
+		WorkloadMetricsBlockSeconds:    getEnvInt("WORKLOAD_METRICS_BLOCK_SECONDS", 1),
+		WorkloadMetricsBatchSize:       getEnvInt("WORKLOAD_METRICS_BATCH_SIZE", 100),
+		WorkloadMetricsMaxJobNames:     getEnvInt("WORKLOAD_METRICS_MAX_JOB_NAMES_PER_QUEUE", 100),
+		WorkloadMetricsStartID:         getEnv("WORKLOAD_METRICS_START_ID", "$"),
 		LogLevel:                       getEnv("LOG_LEVEL", "info"),
 	}
 }
@@ -53,6 +65,15 @@ func getEnvInt(key string, fallback int) int {
 	if value := os.Getenv(key); value != "" {
 		if intVal, err := strconv.Atoi(value); err == nil {
 			return intVal
+		}
+	}
+	return fallback
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	if value := os.Getenv(key); value != "" {
+		if boolVal, err := strconv.ParseBool(value); err == nil {
+			return boolVal
 		}
 	}
 	return fallback

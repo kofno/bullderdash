@@ -26,6 +26,7 @@ The project is optimized for production use, including environments with large B
 - `/queues` should serve from an in-memory snapshot refreshed in the background.
 - Fast queue stats should use cheap Redis count operations like `LLEN` and `ZCARD`.
 - `/ready` and `/readyz` should stay cheap and use a Redis `PING`, not queue discovery or full stats.
+- Workload metrics should be derived from BullMQ event streams in the background, not from retained-job scans.
 - Expensive diagnostics such as orphaned-job detection are important, but should stay off the hot polling path.
 
 ## Practical Rules
@@ -53,6 +54,7 @@ Expected BullMQ keys include:
 - `bull:{queue}:completed`
 - `bull:{queue}:delayed`
 - `bull:{queue}:stalled`
+- `bull:{queue}:events`
 - `bull:{queue}:{jobId}`
 
 Queue discovery is based on the `:id` keys and the configured `QUEUE_PREFIX`.

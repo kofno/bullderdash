@@ -50,6 +50,13 @@ env:
   queuePrefix: "bull"
   metricsPollSeconds: 10
   dashboardRefreshTimeoutSeconds: 30
+  workloadMetrics:
+    enabled: false
+    pollSeconds: 10
+    blockSeconds: 1
+    batchSize: 100
+    maxJobNamesPerQueue: 100
+    startId: "$"
   logLevel: "info"
 
 extraEnv: []

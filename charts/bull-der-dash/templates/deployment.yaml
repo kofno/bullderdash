@@ -88,6 +88,18 @@ spec:
               value: {{ .Values.env.metricsPollSeconds | quote }}
             - name: DASHBOARD_REFRESH_TIMEOUT_SECONDS
               value: {{ .Values.env.dashboardRefreshTimeoutSeconds | quote }}
+            - name: WORKLOAD_METRICS_ENABLED
+              value: {{ .Values.env.workloadMetrics.enabled | quote }}
+            - name: WORKLOAD_METRICS_POLL_SECONDS
+              value: {{ .Values.env.workloadMetrics.pollSeconds | quote }}
+            - name: WORKLOAD_METRICS_BLOCK_SECONDS
+              value: {{ .Values.env.workloadMetrics.blockSeconds | quote }}
+            - name: WORKLOAD_METRICS_BATCH_SIZE
+              value: {{ .Values.env.workloadMetrics.batchSize | quote }}
+            - name: WORKLOAD_METRICS_MAX_JOB_NAMES_PER_QUEUE
+              value: {{ .Values.env.workloadMetrics.maxJobNamesPerQueue | quote }}
+            - name: WORKLOAD_METRICS_START_ID
+              value: {{ .Values.env.workloadMetrics.startId | quote }}
             - name: LOG_LEVEL
               value: {{ .Values.env.logLevel | quote }}
             {{- with .Values.extraEnv }}

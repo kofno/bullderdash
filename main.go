@@ -15,6 +15,7 @@ import (
 	"github.com/kofno/bullderdash/internal/explorer"
 	"github.com/kofno/bullderdash/internal/metrics"
 	"github.com/kofno/bullderdash/internal/web"
+	"github.com/kofno/bullderdash/internal/workloadmetrics"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 )
@@ -76,8 +77,8 @@ func main() {
 	if cfg.RedisSentinelMaster != "" && len(cfg.RedisSentinelAddrs) > 0 {
 		redisMode = "sentinel"
 	}
-	log.Printf("🔧 Starting Bull-der-dash with config: RedisMode=%s, Redis=%s, Port=%s, Prefix=%s, MetricsPoll=%ds, DashboardRefreshTimeout=%ds",
-		redisMode, cfg.RedisAddr, cfg.ServerPort, cfg.QueuePrefix, cfg.MetricsPollSeconds, cfg.DashboardRefreshTimeoutSeconds)
+	log.Printf("🔧 Starting Bull-der-dash with config: RedisMode=%s, Redis=%s, Port=%s, Prefix=%s, MetricsPoll=%ds, DashboardRefreshTimeout=%ds, WorkloadMetrics=%t",
+		redisMode, cfg.RedisAddr, cfg.ServerPort, cfg.QueuePrefix, cfg.MetricsPollSeconds, cfg.DashboardRefreshTimeoutSeconds, cfg.WorkloadMetricsEnabled)
 
 	// 2. Setup Redis/Valkey client
 	rdb := newRedisClient(cfg)
@@ -151,6 +152,25 @@ func main() {
 		}
 	}()
 
+	workloadMetricsCtx, stopWorkloadMetrics := context.WithCancel(context.Background())
+	if cfg.WorkloadMetricsEnabled {
+		collector := workloadmetrics.New(rdb, exp, workloadmetrics.Config{
+			QueuePrefix:         cfg.QueuePrefix,
+			PollInterval:        time.Duration(cfg.WorkloadMetricsPollSeconds) * time.Second,
+			BlockTimeout:        time.Duration(cfg.WorkloadMetricsBlockSeconds) * time.Second,
+			BatchSize:           int64(cfg.WorkloadMetricsBatchSize),
+			MaxJobNamesPerQueue: cfg.WorkloadMetricsMaxJobNames,
+			StartID:             cfg.WorkloadMetricsStartID,
+		})
+		go collector.Run(workloadMetricsCtx)
+		log.Printf("📈 workload metrics collector enabled: poll=%ds block=%ds batch=%d maxJobNamesPerQueue=%d startID=%s",
+			cfg.WorkloadMetricsPollSeconds,
+			cfg.WorkloadMetricsBlockSeconds,
+			cfg.WorkloadMetricsBatchSize,
+			cfg.WorkloadMetricsMaxJobNames,
+			cfg.WorkloadMetricsStartID)
+	}
+
 	// 4. Setup server with graceful shutdown
 	server := &http.Server{
 		Addr:         ":" + cfg.ServerPort,
@@ -178,6 +198,7 @@ func main() {
 	defer cancel()
 
 	close(stopMetrics)
+	stopWorkloadMetrics()
 	if err := server.Shutdown(ctx); err != nil {
 		log.Fatalf("❌ Server forced to shutdown: %v", err)
 	}

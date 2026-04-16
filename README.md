@@ -67,6 +67,12 @@ export SERVER_PORT=8080
 export QUEUE_PREFIX=bull
 export METRICS_POLL_SECONDS=10
 export DASHBOARD_REFRESH_TIMEOUT_SECONDS=30
+export WORKLOAD_METRICS_ENABLED=false
+export WORKLOAD_METRICS_POLL_SECONDS=10
+export WORKLOAD_METRICS_BLOCK_SECONDS=1
+export WORKLOAD_METRICS_BATCH_SIZE=100
+export WORKLOAD_METRICS_MAX_JOB_NAMES_PER_QUEUE=100
+export WORKLOAD_METRICS_START_ID='$'
 export LOG_LEVEL=info
 
 # Build and run
@@ -117,6 +123,12 @@ All configuration is done via environment variables:
 | `QUEUE_PREFIX` | `bull` | BullMQ queue prefix in Redis |
 | `METRICS_POLL_SECONDS` | `10` | Background queue stats refresh interval (seconds) |
 | `DASHBOARD_REFRESH_TIMEOUT_SECONDS` | `30` | Deadline for each dashboard snapshot refresh |
+| `WORKLOAD_METRICS_ENABLED` | `false` | Enable event-stream workload metrics for completed/failed jobs |
+| `WORKLOAD_METRICS_POLL_SECONDS` | `10` | Queue discovery interval for workload metrics |
+| `WORKLOAD_METRICS_BLOCK_SECONDS` | `1` | Redis `XREAD` block timeout for workload metrics |
+| `WORKLOAD_METRICS_BATCH_SIZE` | `100` | Maximum BullMQ event stream entries read per `XREAD` call |
+| `WORKLOAD_METRICS_MAX_JOB_NAMES_PER_QUEUE` | `100` | Per-queue job-name label cardinality cap; additional names use `__other__` |
+| `WORKLOAD_METRICS_START_ID` | `$` | Initial BullMQ event stream ID; `$` starts with new events only |
 | `LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
 
 Sentinel behavior:
@@ -204,6 +216,122 @@ Bull-der-dash exposes the following Prometheus metrics:
 - `redis_operation_duration_seconds{operation}` - Redis operation latency
 - `redis_operation_errors_total{operation}` - Redis operation errors
 
+### Workload Metrics
+When `WORKLOAD_METRICS_ENABLED=true`, bull-der-dash reads BullMQ event streams
+in a background goroutine and exports workload visibility without scanning
+retained jobs during Prometheus scrapes.
+
+- `bullmq_jobs_finished_total{queue, name, result}` - Observed completed/failed jobs
+- `bullmq_job_completion_duration_seconds{queue, name, result}` - Histogram of `finishedOn - processedOn`
+- `bullmq_workload_event_lag_seconds{queue}` - Approximate age of latest observed event stream entry
+- `bullmq_workload_events_read_total{queue, event}` - Event stream entries read
+- `bullmq_workload_events_dropped_total{queue, reason}` - Terminal events skipped because the event itself was missing required fields
+- `bullmq_workload_job_lookup_errors_total{queue, reason}` - Job hash lookup or parsing failures
+
+The `name` label is the BullMQ job name. To keep Prometheus cardinality bounded,
+new job names are capped per queue by `WORKLOAD_METRICS_MAX_JOB_NAMES_PER_QUEUE`.
+Additional names are reported as `__other__`. If a terminal event is observed
+but the job hash is already gone, the count is still recorded with
+`name="__unknown__"` and the duration sample is skipped.
+
+The collector starts at `WORKLOAD_METRICS_START_ID`, which defaults to `$`.
+That means it observes new BullMQ events after startup and does not backfill
+already-retained completed or failed jobs.
+
+#### Useful PromQL
+
+Completed and failed jobs over the last 5 minutes:
+
+```promql
+sum by (queue, name, result) (
+  increase(bullmq_jobs_finished_total[5m])
+)
+```
+
+Jobs completed per second by queue and job name:
+
+```promql
+sum by (queue, name) (
+  rate(bullmq_jobs_finished_total{result="completed"}[5m])
+)
+```
+
+Failed jobs per second by queue and job name:
+
+```promql
+sum by (queue, name) (
+  rate(bullmq_jobs_finished_total{result="failed"}[5m])
+)
+```
+
+Failure ratio by queue and job name:
+
+```promql
+sum by (queue, name) (
+  rate(bullmq_jobs_finished_total{result="failed"}[5m])
+)
+/
+sum by (queue, name) (
+  rate(bullmq_jobs_finished_total[5m])
+)
+```
+
+p95 processing duration by queue and job name:
+
+```promql
+histogram_quantile(
+  0.95,
+  sum by (le, queue, name) (
+    rate(bullmq_job_completion_duration_seconds_bucket[5m])
+  )
+)
+```
+
+p95 processing duration by queue:
+
+```promql
+histogram_quantile(
+  0.95,
+  sum by (le, queue) (
+    rate(bullmq_job_completion_duration_seconds_bucket[5m])
+  )
+)
+```
+
+Average processing duration by queue and job name:
+
+```promql
+sum by (queue, name) (
+  rate(bullmq_job_completion_duration_seconds_sum[5m])
+)
+/
+sum by (queue, name) (
+  rate(bullmq_job_completion_duration_seconds_count[5m])
+)
+```
+
+Collector event lag:
+
+```promql
+bullmq_workload_event_lag_seconds
+```
+
+Collector lookup issues:
+
+```promql
+sum by (queue, reason) (
+  increase(bullmq_workload_job_lookup_errors_total[15m])
+)
+```
+
+Cardinality guardrail check:
+
+```promql
+sum by (queue, name) (
+  increase(bullmq_jobs_finished_total{name=~"__other__|__unknown__"}[15m])
+)
+```
+
 ## Helm Install (GHCR) ⛵
 
 Bull-der-dash is packaged as a Helm chart and published to GHCR as an OCI artifact.
@@ -270,7 +398,8 @@ Bull-der-dash is designed for efficiency:
 - **Low Memory**: ~20-30MB RSS under typical load
 - **Fast Queries**: Lightweight per-key Redis commands for queue stats
 - **Concurrent**: Go's goroutines handle multiple requests efficiently
-- **Scalable**: Stateless design allows horizontal scaling
+- **Scalable**: HTTP request handling stays stateless for horizontal scaling
+- **Workload Metrics**: Optional background event-stream collection avoids retained-job scans
 
 ## Contributing 🤝
 

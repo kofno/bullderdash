@@ -50,6 +50,14 @@ Service metrics:
 - `redis_operation_duration_seconds{operation}`
 - `redis_operation_errors_total{operation}`
 
+Workload metrics, when `WORKLOAD_METRICS_ENABLED=true`:
+- `bullmq_jobs_finished_total{queue,name,result}` - Observed completed/failed jobs by queue, job name, and result
+- `bullmq_job_completion_duration_seconds{queue,name,result}` - Histogram of `finishedOn - processedOn`
+- `bullmq_workload_event_lag_seconds{queue}` - Approximate age of the latest observed BullMQ event stream entry
+- `bullmq_workload_events_read_total{queue,event}` - BullMQ event stream entries read by the collector
+- `bullmq_workload_events_dropped_total{queue,reason}` - Terminal events skipped because the event itself was missing required fields
+- `bullmq_workload_job_lookup_errors_total{queue,reason}` - Job hash lookup or parsing failures
+
 ## Configuration
 
 Environment variables:
@@ -65,7 +73,34 @@ Environment variables:
 - `QUEUE_PREFIX` (default `bull`)
 - `METRICS_POLL_SECONDS` (default `10`)
 - `DASHBOARD_REFRESH_TIMEOUT_SECONDS` (default `30`)
+- `WORKLOAD_METRICS_ENABLED` (default `false`)
+- `WORKLOAD_METRICS_POLL_SECONDS` (default `10`)
+- `WORKLOAD_METRICS_BLOCK_SECONDS` (default `1`)
+- `WORKLOAD_METRICS_BATCH_SIZE` (default `100`)
+- `WORKLOAD_METRICS_MAX_JOB_NAMES_PER_QUEUE` (default `100`)
+- `WORKLOAD_METRICS_START_ID` (default `$`)
 - `LOG_LEVEL` (default `info`)
+
+Workload metrics are collected from BullMQ event streams in a background
+goroutine. `/metrics` only exports in-memory Prometheus data; it does not scan
+retained jobs or issue Redis commands during a scrape.
+
+Example p95 processing duration:
+```promql
+histogram_quantile(
+  0.95,
+  sum by (le, queue, name) (
+    rate(bullmq_job_completion_duration_seconds_bucket[5m])
+  )
+)
+```
+
+Example completed/failed counts:
+```promql
+sum by (queue, name, result) (
+  increase(bullmq_jobs_finished_total[5m])
+)
+```
 
 ## Simulator Notes
 

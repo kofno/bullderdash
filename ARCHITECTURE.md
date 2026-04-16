@@ -258,11 +258,22 @@ Redis Client         • go-redis automatic retries
 
 ## State Management
 
-Bull-der-dash is **completely stateless**:
-- No in-memory caches
-- No session storage
-- All data fetched from Redis on-demand
-- Can scale horizontally without coordination
+Bull-der-dash keeps HTTP request handling stateless:
+- Dashboard and inspection routes do not depend on session state
+- Health checks stay cheap and do not depend on background collectors
+- Queue depth metrics are refreshed in the background and exported from memory
+- Job inspection data is fetched from Redis on demand
+
+Optional background collectors may maintain small telemetry state when the data
+being collected is event-derived. For example, workload metrics can keep
+in-memory BullMQ event stream offsets, event lag, and bounded job-name
+cardinality state. This telemetry state must not affect dashboard correctness,
+health checks, or job inspection behavior.
+
+In the current single-instance deployment model, a background collector can run
+inside the bull-der-dash process. If the app is scaled horizontally later, any
+global event-derived collector must either run in only one replica or add
+explicit ownership coordination to avoid double-counting metrics.
 
 ## Performance Characteristics
 
