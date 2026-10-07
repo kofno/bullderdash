@@ -50,6 +50,24 @@ different target (e.g. an in-cluster Service).
   labelled for discovery; the `datasource` variable resolves to your default
   Prometheus automatically.
 
+## Alerts
+
+`alerts/queue-pressure.yaml` is a Grafana unified-alerting provisioning file
+(source of truth) with two per-queue rules that pair with the Queue Health
+**Backlog pressure** panels:
+
+| UID | Fires when | Default |
+|-----|-----------|---------|
+| `bdd-drain-time-default` | `waiting / completed-per-sec` (drain ETA) stays high | > 900s for 10m |
+| `bdd-backlog-growing-default` | `deriv(bullmq_queue_waiting[15m])` stays positive | > 0.05 jobs/s for 15m |
+
+Both are multi-dimensional (one alert instance per `queue`, via `legendFormat
+{{queue}}`) and ship with no `notification_settings`, so they attach to your
+default notification policy. Thresholds are deliberately conservative — tune
+`for` and the threshold `params` to your SLOs. Drop the file alongside the
+dashboards wherever you provision Grafana; downstream deployments (e.g. a
+cluster ConfigMap) can add a cluster label prefix and a specific receiver.
+
 ## Notes
 
 - **Failed / stalled / orphaned** stat tiles turn red at the first non-zero
