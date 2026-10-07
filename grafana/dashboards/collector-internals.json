@@ -576,7 +576,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(redis_operation_duration_seconds_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(redis_operation_duration_seconds_bucket{job=\"bull-der-dash\"}[$__rate_interval])))",
           "range": true,
           "instant": false,
           "refId": "A",
@@ -670,7 +670,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (operation) (rate(redis_operation_errors_total[$__rate_interval]))",
+          "expr": "sum by (operation) (rate(redis_operation_errors_total{job=\"bull-der-dash\"}[$__rate_interval]))",
           "range": true,
           "instant": false,
           "refId": "A",
@@ -760,7 +760,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (status) (rate(http_request_duration_seconds_count[$__rate_interval]))",
+          "expr": "sum by (status) (rate(http_request_duration_seconds_count{job=\"bull-der-dash\"}[$__rate_interval]))",
           "range": true,
           "instant": false,
           "refId": "A",
@@ -850,7 +850,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, path) (rate(http_request_duration_seconds_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, path) (rate(http_request_duration_seconds_bucket{job=\"bull-der-dash\"}[$__rate_interval])))",
           "range": true,
           "instant": false,
           "refId": "A",
@@ -927,7 +927,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "process_resident_memory_bytes",
+          "expr": "process_resident_memory_bytes{job=\"bull-der-dash\"}",
           "range": true,
           "instant": false,
           "refId": "A",
@@ -990,7 +990,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "go_goroutines",
+          "expr": "go_goroutines{job=\"bull-der-dash\"}",
           "range": true,
           "instant": false,
           "refId": "A",
@@ -1080,7 +1080,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "rate(process_cpu_seconds_total[$__rate_interval])",
+          "expr": "rate(process_cpu_seconds_total{job=\"bull-der-dash\"}[$__rate_interval])",
           "range": true,
           "instant": false,
           "refId": "A",
