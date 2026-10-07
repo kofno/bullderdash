@@ -186,7 +186,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (event) (rate(bullmq_workload_events_read_total[$__rate_interval]))",
+          "expr": "sum by (event) (rate(bullmq_workload_events_read_total{queue=~\"$queue\"}[$__rate_interval]))",
           "range": true,
           "instant": false,
           "refId": "A",
@@ -284,7 +284,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "max by (queue) (bullmq_workload_event_lag_seconds)",
+          "expr": "max by (queue) (bullmq_workload_event_lag_seconds{queue=~\"$queue\"})",
           "range": true,
           "instant": false,
           "refId": "A",
@@ -378,7 +378,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (reason) (rate(bullmq_workload_events_dropped_total[$__rate_interval]))",
+          "expr": "sum by (reason) (rate(bullmq_workload_events_dropped_total{queue=~\"$queue\"}[$__rate_interval]))",
           "range": true,
           "instant": false,
           "refId": "A",
@@ -472,7 +472,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (reason) (rate(bullmq_workload_job_lookup_errors_total[$__rate_interval]))",
+          "expr": "sum by (reason) (rate(bullmq_workload_job_lookup_errors_total{queue=~\"$queue\"}[$__rate_interval]))",
           "range": true,
           "instant": false,
           "refId": "A",
