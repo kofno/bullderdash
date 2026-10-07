@@ -260,7 +260,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(bullmq_jobs_finished_total{result=\"failed\", queue=~\"$queue\", name=~\"$name\"}[$__rate_interval]))",
+          "expr": "(sum(rate(bullmq_jobs_finished_total{result=\"failed\", queue=~\"$queue\", name=~\"$name\"}[$__rate_interval])) or vector(0))",
           "range": true,
           "instant": false,
           "refId": "A",
@@ -332,7 +332,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "100 * sum(rate(bullmq_jobs_finished_total{result=\"failed\", queue=~\"$queue\", name=~\"$name\"}[$__rate_interval])) / clamp_min(sum(rate(bullmq_jobs_finished_total{queue=~\"$queue\", name=~\"$name\"}[$__rate_interval])), 1e-9)",
+          "expr": "100 * (sum(rate(bullmq_jobs_finished_total{result=\"failed\", queue=~\"$queue\", name=~\"$name\"}[$__rate_interval])) or vector(0)) / clamp_min(sum(rate(bullmq_jobs_finished_total{queue=~\"$queue\", name=~\"$name\"}[$__rate_interval])), 1e-9)",
           "range": true,
           "instant": false,
           "refId": "A",
@@ -592,7 +592,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(bullmq_jobs_finished_total{result=\"failed\", queue=~\"$queue\", name=~\"$name\"}[$__rate_interval]))",
+          "expr": "(sum(rate(bullmq_jobs_finished_total{result=\"failed\", queue=~\"$queue\", name=~\"$name\"}[$__rate_interval])) or vector(0))",
           "range": true,
           "instant": false,
           "refId": "B",
@@ -866,7 +866,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum by (queue) (rate(bullmq_jobs_finished_total{result=\"failed\", queue=~\"$queue\", name=~\"$name\"}[$__rate_interval])) / clamp_min(sum by (queue) (rate(bullmq_jobs_finished_total{queue=~\"$queue\", name=~\"$name\"}[$__rate_interval])), 1e-9)",
+          "expr": "(sum by (queue) (rate(bullmq_jobs_finished_total{result=\"failed\", queue=~\"$queue\", name=~\"$name\"}[$__rate_interval])) or 0 * sum by (queue) (rate(bullmq_jobs_finished_total{queue=~\"$queue\", name=~\"$name\"}[$__rate_interval]))) / clamp_min(sum by (queue) (rate(bullmq_jobs_finished_total{queue=~\"$queue\", name=~\"$name\"}[$__rate_interval])), 1e-9)",
           "range": true,
           "instant": false,
           "refId": "A",
