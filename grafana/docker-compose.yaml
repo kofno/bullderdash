@@ -1,0 +1,46 @@
+# Local observability stack for bull-der-dash dashboards.
+#
+#   docker compose -f grafana/docker-compose.yaml up -d
+#   Grafana:    http://localhost:3001  (admin / admin)
+#   Prometheus: http://localhost:9491
+#
+# Ports are deliberately non-default (3001/9491) so this stack can run
+# alongside other local Grafana/Prometheus instances without clashing.
+# Point Prometheus at a running bull-der-dash (`task dev`, port 8080 on the
+# host) via host.docker.internal; see grafana/prometheus/prometheus.yml.
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: bdd-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=3d
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - bdd-prom-data:/prometheus
+    ports:
+      - "9491:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: bdd-grafana
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_DEFAULT_THEME: dark
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/queue-health.json
+    volumes:
+      - ./provisioning:/etc/grafana/provisioning:ro
+      - ./dashboards:/var/lib/grafana/dashboards:ro
+      - bdd-grafana-data:/var/lib/grafana
+    ports:
+      - "3001:3000"
+
+volumes:
+  bdd-prom-data:
+  bdd-grafana-data:
