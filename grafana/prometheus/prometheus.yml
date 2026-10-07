@@ -1,0 +1,15 @@
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+
+scrape_configs:
+  # bull-der-dash exposes Prometheus metrics on /metrics.
+  # When running the dashboard via `task dev` on the host, Docker Desktop
+  # reaches it through host.docker.internal. Override with BDD_TARGET if needed.
+  - job_name: bull-der-dash
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - host.docker.internal:8080
+        labels:
+          service: bull-der-dash
