@@ -1,0 +1,111 @@
+apiVersion: 1
+groups:
+    - orgId: 1
+      name: BullMQ Queue Pressure
+      folder: Alert Rules
+      interval: 1m
+      rules:
+        - uid: bdd-drain-time-default
+          title: 'BullMQ queue drain time is high'
+          condition: C
+          data:
+            - refId: A
+              relativeTimeRange:
+                from: 900
+                to: 0
+              datasourceUid: prometheus
+              model:
+                editorMode: code
+                expr: sum by (queue) (bullmq_queue_waiting) / clamp_min(sum by (queue) (rate(bullmq_jobs_finished_total{result="completed"}[5m])), 0.0001)
+                instant: true
+                intervalMs: 1000
+                legendFormat: '{{queue}}'
+                maxDataPoints: 43200
+                range: false
+                refId: A
+            - refId: C
+              datasourceUid: __expr__
+              model:
+                conditions:
+                    - evaluator:
+                        params:
+                            - 900
+                        type: gt
+                      operator:
+                        type: and
+                      query:
+                        params:
+                            - C
+                      reducer:
+                        params: []
+                        type: last
+                      type: query
+                datasource:
+                    type: __expr__
+                    uid: __expr__
+                expression: A
+                intervalMs: 1000
+                maxDataPoints: 43200
+                refId: C
+                type: threshold
+          noDataState: OK
+          execErrState: Error
+          for: 10m
+          annotations:
+            summary: "BullMQ queue {{ $labels.queue }} drain ETA exceeds 15m"
+            description: "Backlog is not clearing: waiting depth / completion rate is over 900s for 10m. Workers are likely falling behind or wedged. Threshold is tunable."
+          labels:
+            severity: warning
+          isPaused: false
+        - uid: bdd-backlog-growing-default
+          title: 'BullMQ backlog is growing'
+          condition: C
+          data:
+            - refId: A
+              relativeTimeRange:
+                from: 900
+                to: 0
+              datasourceUid: prometheus
+              model:
+                editorMode: code
+                expr: sum by (queue) (deriv(bullmq_queue_waiting[15m]))
+                instant: true
+                intervalMs: 1000
+                legendFormat: '{{queue}}'
+                maxDataPoints: 43200
+                range: false
+                refId: A
+            - refId: C
+              datasourceUid: __expr__
+              model:
+                conditions:
+                    - evaluator:
+                        params:
+                            - 0.05
+                        type: gt
+                      operator:
+                        type: and
+                      query:
+                        params:
+                            - C
+                      reducer:
+                        params: []
+                        type: last
+                      type: query
+                datasource:
+                    type: __expr__
+                    uid: __expr__
+                expression: A
+                intervalMs: 1000
+                maxDataPoints: 43200
+                refId: C
+                type: threshold
+          noDataState: OK
+          execErrState: Error
+          for: 15m
+          annotations:
+            summary: "BullMQ queue {{ $labels.queue }} backlog is trending up"
+            description: "Waiting backlog slope (deriv over 15m) has stayed above 0.05 jobs/s for 15m: arrivals are outpacing completions. Threshold is tunable."
+          labels:
+            severity: warning
+          isPaused: false

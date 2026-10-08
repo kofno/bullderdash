@@ -892,7 +892,7 @@
     {
       "id": 13,
       "type": "row",
-      "title": "Failure & stall watch",
+      "title": "Backlog pressure (drain & trend)",
       "collapsed": false,
       "datasource": null,
       "gridPos": {
@@ -906,6 +906,208 @@
     {
       "id": 14,
       "type": "timeseries",
+      "title": "Est. time to drain by queue",
+      "description": "Backlog drain ETA = waiting / completion rate, per queue. Rising or very high = workers falling behind; shoots up when work is queued but little/nothing is completing. This is the single best 'falling behind' signal.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 23
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": false,
+            "showPoints": "never",
+            "pointSize": 5,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisColorMode": "text",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 300
+              },
+              {
+                "color": "red",
+                "value": 900
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (queue) (bullmq_queue_waiting{queue=~\"$queue\"}) / clamp_min(sum by (queue) (rate(bullmq_jobs_finished_total{result=\"completed\", queue=~\"$queue\"}[$__rate_interval])), 0.0001)",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{queue}}"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Net backlog change (waiting /s) by queue",
+      "description": "Slope of the waiting backlog in jobs/sec (15m deriv). >0 = pile growing, <0 = draining. Sustained positive is the earliest arrival-vs-drain warning.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 23
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "spanNulls": false,
+            "showPoints": "never",
+            "pointSize": 5,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "axisColorMode": "text",
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum by (queue) (deriv(bullmq_queue_waiting{queue=~\"$queue\"}[15m]))",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{queue}}"
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "type": "row",
+      "title": "Failure & stall watch",
+      "collapsed": false,
+      "datasource": null,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 31
+      },
+      "panels": []
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
       "title": "Failed set by queue",
       "description": "",
       "datasource": {
@@ -916,7 +1118,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 23
+        "y": 32
       },
       "fieldConfig": {
         "defaults": {
@@ -998,7 +1200,7 @@
       ]
     },
     {
-      "id": 15,
+      "id": 18,
       "type": "timeseries",
       "title": "Stalled set by queue",
       "description": "",
@@ -1010,7 +1212,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 23
+        "y": 32
       },
       "fieldConfig": {
         "defaults": {
@@ -1088,7 +1290,7 @@
       ]
     },
     {
-      "id": 16,
+      "id": 19,
       "type": "table",
       "title": "Current state by queue",
       "description": "Instant snapshot of every tracked BullMQ state, per queue.",
@@ -1100,7 +1302,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 31
+        "y": 40
       },
       "fieldConfig": {
         "defaults": {
