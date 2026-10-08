@@ -13,7 +13,8 @@
               ▼                   ▼                   ▼
     ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
     │   Web Routes    │  │  Metrics API    │  │  Health Checks  │
-    │   (HTMX UI)     │  │  (Prometheus)   │  │  (K8s Probes)   │
+    │ (HTMX UI +      │  │  (Prometheus)   │  │  (K8s Probes)   │
+    │  Search Console)│  │                 │  │                 │
     └─────────────────┘  └─────────────────┘  └─────────────────┘
               │                   │                   │
               └───────────────────┼───────────────────┘
@@ -48,7 +49,28 @@
                     │  • bull:{queue}:delayed  │
                     │  • bull:{queue}:stalled  │
                     │  • bull:{queue}:{jobId}  │
+                    │  • bull:{queue}:events   │
                     └──────────────────────────┘
+```
+
+### History & Search Path (when `STORE_ENABLED=true`)
+
+Search is decoupled from the live Redis path. A background collector tails the
+BullMQ event streams and hands terminal (completed/failed) jobs to a background
+writer that persists them to an embedded SQLite database. The search console and
+JSON search API read exclusively from SQLite, so search never scans live Redis.
+
+```
+Redis BullMQ event streams
+   │  (background tail)
+   ▼
+Workloadmetrics Collector ──> Prometheus metrics (in-memory)
+   │  terminal jobs
+   ▼
+Store Writer (batched) ──> Embedded SQLite (WAL) ──> FTS5 full-text index
+                                   ▲                        │
+         Sweeper (tiered TTL) ─────┘           /console, /v1/search, /v1/jobs/{id}
+         failures kept longer than successes            (read-only)
 ```
 
 ## Request Flow
@@ -141,6 +163,28 @@ Text Response (Prometheus format)
 Prometheus stores & graphs
 ```
 
+### Search Console Request (when `STORE_ENABLED=true`)
+```
+Browser
+   │ GET /console
+   ▼
+ConsoleHandler (web/console.go)
+   │ Serves embedded console.html (vanilla JS, no framework)
+   ▼
+Browser (fetch, same-origin)
+   │ GET /v1/search?q=...&state=...&trace_id=...
+   ▼
+SearchAPI (web) ──> Store.Search() (internal/store)
+   │ SQLite FTS5 query (bounded read concurrency)
+   ▼
+JSON rows ──> table render; click a row
+   │ GET /v1/jobs/{id}
+   ▼
+Store.Job() ──> SQLite point lookup ──> JSON detail (data + opts)
+   ▼
+Browser renders detail overlay / trace lineage
+```
+
 ## Data Flow
 
 ### Queue Discovery
@@ -187,9 +231,15 @@ main.go
   ├─> config/config.go (environment vars)
   ├─> explorer/explorer.go (Redis operations)
   │     └─> metrics/metrics.go (Prometheus)
+  ├─> workloadmetrics/ (BullMQ event-stream collector)
+  │     ├─> metrics/metrics.go (Prometheus)
+  │     └─> store/store.go (persist terminal jobs)
+  ├─> store/store.go (embedded SQLite history + FTS5; writer + sweeper)
   ├─> web/handlers.go (HTTP handlers)
   │     ├─> explorer/explorer.go
   │     └─> metrics/metrics.go
+  ├─> web/console.go (embedded search console + /v1 search API)
+  │     └─> store/store.go (read-only search/detail)
   └─> prometheus/promhttp (metrics endpoint)
 ```
 
@@ -275,6 +325,13 @@ inside the bull-der-dash process. If the app is scaled horizontally later, any
 global event-derived collector must either run in only one replica or add
 explicit ownership coordination to avoid double-counting metrics.
 
+When history persistence is enabled (`STORE_ENABLED=true`), the process also owns
+an embedded SQLite database (WAL mode). SQLite is a single writer, so this mode
+is single-replica by design: the Helm chart provisions one `ReadWriteOnce` PVC
+and uses the `Recreate` update strategy so a rollout never leaves two pods
+contending for the same volume. Horizontal scaling is only safe with history
+persistence disabled (or with a future shared/external store).
+
 ## Performance Characteristics
 
 | Operation | Latency | Notes |
@@ -289,10 +346,16 @@ explicit ownership coordination to avoid double-counting metrics.
 ## Scaling Considerations
 
 ### Horizontal Scaling
+
+Horizontal scaling is only safe with history persistence **disabled**
+(`STORE_ENABLED=false`), since stateless read paths can sit behind a load
+balancer. With persistence enabled, SQLite's single-writer model requires a
+single replica (one RWO PVC + `Recreate` strategy); scale vertically instead.
+
 ```
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
 │ Bull-der-   │     │ Bull-der-   │     │ Bull-der-   │
-│ dash Pod 1  │     │ dash Pod 2  │     │ dash Pod 3  │
+│ dash Pod 1  │     │ dash Pod 2  │     │ dash Pod 3  │  (STORE_ENABLED=false)
 └─────────────┘     └─────────────┘     └─────────────┘
       │                   │                   │
       └───────────────────┼───────────────────┘
@@ -307,14 +370,15 @@ explicit ownership coordination to avoid double-counting metrics.
 ```
 
 ### Resource Usage (per instance)
-- **Memory**: 20-30 MB
+- **Memory**: 20-30 MB (higher with a large SQLite page cache under active search)
 - **CPU**: 0.1 cores (idle), 0.5 cores (active)
 - **Network**: Minimal (Redis protocol is efficient)
-- **Disk**: 20 MB (binary only)
+- **Disk**: 20 MB (binary only); plus the SQLite history DB on the mounted volume when persistence is enabled
 
 ### Bottlenecks
 1. **Redis connection limit** - Use connection pooling (already implemented)
 2. **Job list size** - Paginate for large queues (TODO)
 3. **Metrics cardinality** - Queue name is only label (safe)
+4. **SQLite single writer** - History persistence is single-replica; bound read concurrency with `STORE_READ_CONCURRENCY`
 
 

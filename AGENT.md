@@ -6,6 +6,7 @@ This file gives coding agents the minimum context needed to work effectively in 
 `bull-der-dash` is a Go web app for monitoring BullMQ queues in Redis/Valkey. It serves:
 - a live HTMX dashboard
 - queue and job inspection pages
+- a full-text search console (`/console`) backed by an embedded SQLite history store
 - Prometheus metrics
 - Kubernetes-friendly health endpoints
 
@@ -16,7 +17,9 @@ The project is optimized for production use, including environments with large B
 - `internal/config`: environment-based config
 - `internal/explorer`: Redis access, BullMQ key access, job parsing
 - `internal/metrics`: Prometheus metrics
-- `internal/web`: handlers, templates, dashboard snapshot cache
+- `internal/store`: embedded SQLite job-history store + FTS5 search
+- `internal/workloadmetrics`: BullMQ event-stream collector (metrics + history persistence)
+- `internal/web`: handlers, templates, dashboard snapshot cache, embedded search console
 - `cmd/redis-cli`: lightweight diagnostic CLI
 - `scripts/sim`: Bun simulator for BullMQ load and state coverage
 
@@ -40,7 +43,7 @@ The project is optimized for production use, including environments with large B
   - background refresh
   - in-memory snapshot caching
   - incremental or lazy loading
-- Keep search available, but avoid turning it into an unbounded request-time crawl of all retained jobs.
+- Keep search available via the embedded SQLite FTS5 history store (`/console`, `/v1/search`); persistence runs on a background writer. Do not reintroduce request-time crawls of all retained jobs in Redis.
 
 ## Redis / BullMQ Notes
 Expected BullMQ keys include:

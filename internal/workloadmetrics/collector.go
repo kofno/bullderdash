@@ -30,17 +30,20 @@ type Config struct {
 	BatchSize           int64
 	MaxJobNamesPerQueue int
 	StartID             string
+	TraceIDKeys         []string
 }
 
 type Collector struct {
 	client     *redis.Client
 	discoverer QueueDiscoverer
 	cfg        Config
+	store      JobStore
 
 	mu      sync.Mutex
 	queues  []string
 	lastIDs map[string]string
 	limiter *jobNameLimiter
+	lineage *lineageCache
 	now     func() time.Time
 }
 
@@ -50,14 +53,16 @@ type jobSample struct {
 	HasDuration     bool
 }
 
-func New(client *redis.Client, discoverer QueueDiscoverer, cfg Config) *Collector {
+func New(client *redis.Client, discoverer QueueDiscoverer, jobStore JobStore, cfg Config) *Collector {
 	cfg = normalizeConfig(cfg)
 	return &Collector{
 		client:     client,
 		discoverer: discoverer,
 		cfg:        cfg,
+		store:      jobStore,
 		lastIDs:    make(map[string]string),
 		limiter:    newJobNameLimiter(cfg.MaxJobNamesPerQueue),
+		lineage:    newLineageCache(0),
 		now:        time.Now,
 	}
 }
@@ -236,6 +241,11 @@ func (c *Collector) processMessage(ctx context.Context, queue string, msg redis.
 		return
 	}
 
+	if c.store != nil {
+		c.recordTerminal(ctx, queue, jobID, result)
+		return
+	}
+
 	sample, err := c.loadJobSample(ctx, queue, jobID)
 	if err != nil {
 		metrics.WorkloadJobLookupErrors.WithLabelValues(queue, lookupErrorReason(err)).Inc()
@@ -246,6 +256,30 @@ func (c *Collector) processMessage(ctx context.Context, queue string, msg redis.
 	if sample.HasDuration {
 		metrics.WorkloadJobCompletionDuration.WithLabelValues(queue, name, result).Observe(sample.DurationSeconds)
 	}
+}
+
+// recordTerminal handles a terminal event when persistence is enabled: a single
+// HGetAll serves both the metrics sample and the persisted record so Redis load
+// is unchanged versus the metrics-only path.
+func (c *Collector) recordTerminal(ctx context.Context, queue, jobID, result string) {
+	data, err := c.loadJobFull(ctx, queue, jobID)
+	if err != nil {
+		metrics.WorkloadJobLookupErrors.WithLabelValues(queue, lookupErrorReason(err)).Inc()
+		// Still record the terminal count with an unknown name so metrics stay consistent.
+		name := c.limiter.label(queue, "")
+		metrics.WorkloadJobsFinished.WithLabelValues(queue, name, result).Inc()
+		return
+	}
+
+	sample := sampleFromHash(data)
+	name := c.limiter.label(queue, sample.Name)
+	metrics.WorkloadJobsFinished.WithLabelValues(queue, name, result).Inc()
+	if sample.HasDuration {
+		metrics.WorkloadJobCompletionDuration.WithLabelValues(queue, name, result).Observe(sample.DurationSeconds)
+	}
+
+	rec := c.buildRecord(ctx, queue, jobID, result, data)
+	c.store.Enqueue(rec)
 }
 
 func (c *Collector) loadJobSample(ctx context.Context, queue, jobID string) (jobSample, error) {

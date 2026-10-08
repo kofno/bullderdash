@@ -3,7 +3,7 @@
 Foundational mandates for Gemini CLI in the `bull-der-dash` repository.
 
 ## Project Context
-`bull-der-dash` is a high-performance dashboard for monitoring BullMQ queues, built with Go, HTMX, and Prometheus. It is designed for Kubernetes-native deployments, production safety, and low overhead under large retained-job counts.
+`bull-der-dash` is a high-performance dashboard for monitoring BullMQ queues, built with Go and Prometheus. It is designed for Kubernetes-native deployments, production safety, and low overhead under large retained-job counts. The live dashboard is HTMX-driven, while the newer full-text search console (`/console`) is a dependency-free vanilla-JS page backed by an embedded SQLite history store; HTMX is being phased out in favor of the console.
 
 ## Core Mandates
 
@@ -15,14 +15,20 @@ Foundational mandates for Gemini CLI in the `bull-der-dash` repository.
   - `internal/config`: Environment-based configuration.
   - `internal/explorer`: Redis/Valkey interaction and BullMQ parsing logic.
   - `internal/metrics`: Prometheus metric definitions.
-  - `internal/web`: HTTP handlers, templates, and lightweight view caches.
+  - `internal/store`: Embedded SQLite job-history store with FTS5 full-text search.
+  - `internal/workloadmetrics`: BullMQ event-stream collector feeding metrics and history persistence.
+  - `internal/web`: HTTP handlers, templates, lightweight view caches, and the embedded search console.
 - **Operational Shape**:
   - Keep the dashboard live, but keep request paths cheap.
   - Prefer background refresh plus in-memory snapshots for frequently polled UI fragments.
   - Readiness and liveness endpoints must stay cheap and Kubernetes-safe.
+- **Persistence & Search**:
+  - Job history is persisted to an embedded SQLite database (`modernc.org/sqlite`, pure-Go, no CGO, WAL mode) from a background writer — never on the live polling path.
+  - Full-text search is served from SQLite FTS5 via `/console` and `/v1/search`; it must not fall back to scanning live Redis.
+  - SQLite is a single writer: the deployment runs a single replica with a `ReadWriteOnce` volume and the `Recreate` update strategy.
 - **Frontend**:
-  - Use **HTMX** for dynamic updates.
-  - Use **Tailwind CSS** classes directly in HTML templates for styling to maintain ease of packaging.
+  - The live dashboard uses **HTMX** with **Tailwind CSS** classes directly in templates.
+  - The search console is dependency-free vanilla JS embedded via `go:embed`; prefer the console for new UI work and avoid adding new HTMX/CDN dependencies.
 - **CLI Helper**: The `cmd/redis-cli` tool is a lightweight helper for Redis operations; keep it focused on diagnostics.
 
 ### Performance Rules
@@ -36,8 +42,9 @@ Foundational mandates for Gemini CLI in the `bull-der-dash` repository.
 - **Diagnostics are separate**:
   - Deep scans, orphaned detection, and other expensive correctness checks belong in admin/diagnostic flows or background work.
 - **Search should remain useful**:
-  - Keep text search available, but be explicit about bounds and performance characteristics.
-  - Avoid turning broad text search into an unbounded request-path Redis crawl.
+  - Full-text search is served from the embedded SQLite FTS5 history store, not from live Redis.
+  - Persistence happens on a background writer; keep it off the live dashboard polling path.
+  - Never regress search into an unbounded request-path Redis crawl.
 
 ### BullMQ / Redis Assumptions
 - Queue discovery is based on BullMQ key patterns like `bull:{queue}:id`.
@@ -66,8 +73,9 @@ Foundational mandates for Gemini CLI in the `bull-der-dash` repository.
 - **Environment**: Use `.env.example` as a template for local environment variables.
 
 ## Technical Stack
-- **Backend**: Go 1.25.4+
-- **Database**: Redis / Valkey (via `go-redis/v9`)
-- **Frontend**: HTMX, Vanilla HTML/Templates, Tailwind CSS
+- **Backend**: Go 1.26+
+- **Live Data**: Redis / Valkey (via `go-redis/v9`)
+- **History & Search**: Embedded SQLite with FTS5 (`modernc.org/sqlite`, pure-Go, CGO-free)
+- **Frontend**: HTMX + Tailwind CSS (live dashboard); dependency-free vanilla JS (search console)
 - **Observability**: Prometheus
 - **Environment**: Kubernetes (kinD for local dev)

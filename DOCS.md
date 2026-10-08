@@ -21,6 +21,14 @@
 - URL: `http://localhost:8080/job/detail?queue=<name>&id=<id>`
 - JSON view of full job data
 
+### Search Console
+- URL: `http://localhost:8080/console`
+- Available when `STORE_ENABLED=true`
+- Full-text search over persisted job history (name, trace id, last error, payloads)
+- Filter by queue, job name, state, trace id, and time window
+- Drill down into a trace's lineage and open full single-job detail
+- Dependency-free page served from the embedded SQLite FTS5 store — it never scans live Redis
+
 ## Endpoints
 
 - `GET /` - Dashboard
@@ -28,6 +36,9 @@
 - `GET /queue/<name>` - Queue detail view
 - `GET /queue/jobs?queue=<name>&state=<state>` - State job list
 - `GET /job/detail?queue=<name>&id=<id>` - Job detail (JSON)
+- `GET /console` - Full-text search console (when `STORE_ENABLED=true`)
+- `GET /v1/search?q=&name=&state=&trace_id=&since_ms=&limit=` - Search persisted history (JSON; requires at least one of `q`/`name`/`state`/`trace_id`, else `400`; `503` when readers are saturated)
+- `GET /v1/jobs/{id}` - Persisted detail for one job (JSON; `404` once it has aged out of retention)
 - `GET /metrics` - Prometheus metrics
 - `GET /health` and `GET /ready` - Health checks
 
@@ -79,11 +90,28 @@ Environment variables:
 - `WORKLOAD_METRICS_BATCH_SIZE` (default `100`)
 - `WORKLOAD_METRICS_MAX_JOB_NAMES_PER_QUEUE` (default `100`)
 - `WORKLOAD_METRICS_START_ID` (default `$`)
+- `STORE_ENABLED` (default `false`) - persist completed/failed jobs to SQLite and enable `/console`
+- `STORE_DB_PATH` (default `/data/history.db`) - SQLite file path; its directory must be writable
+- `STORE_WRITE_BUFFER` (default `4096`) - in-memory write channel size; records drop when full
+- `STORE_BATCH_SIZE` (default `256`) - max records per write transaction
+- `STORE_FLUSH_MILLIS` (default `500`) - max time a batch waits before flushing
+- `STORE_TRACE_KEYS` (default empty) - comma-separated payload keys used to derive a trace id
+- `STORE_COMPLETED_TTL_HOURS` (default `24`) - retention for non-failed history; `0` disables
+- `STORE_FAILED_TTL_HOURS` (default `336`) - retention for failed history (14 days); `0` disables
+- `STORE_SWEEP_SECONDS` (default `300`) - interval between retention sweeps
+- `STORE_MAX_ROWS` (default `0`) - optional hard cap on total history rows; `0` disables
+- `STORE_READ_CONCURRENCY` (default `16`) - max concurrent search/detail reads; excess gets `503`
 - `LOG_LEVEL` (default `info`)
 
 Workload metrics are collected from BullMQ event streams in a background
 goroutine. `/metrics` only exports in-memory Prometheus data; it does not scan
 retained jobs or issue Redis commands during a scrape.
+
+When `STORE_ENABLED=true`, terminal (completed/failed) jobs observed by the
+workload collector are written to the embedded SQLite history store by a
+background writer, and a sweeper ages them out per the `STORE_*_TTL_HOURS`
+settings (failures are kept longer than successes). Search and job-detail reads
+are served from SQLite, never from live Redis.
 
 Example p95 processing duration:
 ```promql

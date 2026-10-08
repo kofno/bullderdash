@@ -9,14 +9,20 @@ A high-performance dashboard for monitoring BullMQ queues, built in Go for speed
 - **Multi-State Tracking**: waiting, active, paused, prioritized, waiting-children, completed, failed, delayed, stalled, orphaned
 - **Queue Detail View**: Single-queue view with jobs grouped by state
 - **Job Introspection**: JSON detail for any job
+- **Persistent Job History**: Completed/failed jobs are recorded to an embedded
+  SQLite database (WAL mode, pure-Go `modernc.org/sqlite`, no CGO) off the hot
+  path, so the live Redis/Valkey instance is never scanned to answer queries
+- **Full-Text Search Console**: `/console` search UI backed by SQLite FTS5 over
+  job name, trace id, last error, and payloads — with trace-lineage drill-down
+  and single-job detail, served as a dependency-free same-origin page
+- **Tiered Retention Sweeper**: Background goroutine that ages out history, keeping
+  failures longer than successes, with an optional hard row cap
 - **Prometheus Metrics**: Built-in `/metrics` endpoint
 - **Health Checks**: `/health` and `/ready`
 - **Environment Configuration**: 12-factor app design with environment variables
-- **Lightweight**: Low memory footprint and fast response times
-- **HTMX-powered UI**: Interactive dashboard without heavy JavaScript frameworks
+- **Lightweight**: Low memory footprint and fast response times, single static binary
 
 ### Roadmap 🗺️
-- **Search**: Bluge-powered full-text search across job data
 - **Actions**: Retry, remove, pause/resume operations (requires porting BullMQ Lua scripts)
 - **Alerts**: Threshold-based notifications
 - **Historical Metrics**: Time-series data and trends
@@ -36,16 +42,24 @@ bull-der-dash/
 │   ├── config/            # Environment-based configuration
 │   ├── explorer/          # Redis/Valkey interaction & BullMQ parsing
 │   ├── metrics/           # Prometheus metrics definitions
-│   └── web/               # HTTP handlers & templates
+│   ├── store/             # Embedded SQLite job-history store (FTS5 search)
+│   ├── workloadmetrics/   # Event-stream collector + history persistence
+│   └── web/               # HTTP handlers, templates & embedded search console
 ```
+
+> The live dashboard is HTMX-driven, but the search console (`/console`) is a
+> dependency-free, framework-free page (vanilla JS, embedded via `go:embed`) that
+> talks only to the same-origin `/v1/search` and `/v1/jobs/{id}` JSON endpoints.
+> New UI work targets the console; HTMX is being phased out.
 
 ## Quick Start 🚀
 
 ### Prerequisites
-- Go 1.25.4+
+- Go 1.26+
 - Redis/Valkey instance with BullMQ data
 - Bun (for the simulator)
 - (Optional) Kubernetes cluster for deployment
+- (Optional) A writable volume for the SQLite history database when `STORE_ENABLED=true`
 
 ### Local Development
 
@@ -73,6 +87,17 @@ export WORKLOAD_METRICS_BLOCK_SECONDS=1
 export WORKLOAD_METRICS_BATCH_SIZE=100
 export WORKLOAD_METRICS_MAX_JOB_NAMES_PER_QUEUE=100
 export WORKLOAD_METRICS_START_ID='$'
+export STORE_ENABLED=false
+export STORE_DB_PATH=/data/history.db
+export STORE_WRITE_BUFFER=4096
+export STORE_BATCH_SIZE=256
+export STORE_FLUSH_MILLIS=500
+export STORE_TRACE_KEYS=
+export STORE_COMPLETED_TTL_HOURS=24
+export STORE_FAILED_TTL_HOURS=336
+export STORE_SWEEP_SECONDS=300
+export STORE_MAX_ROWS=0
+export STORE_READ_CONCURRENCY=16
 export LOG_LEVEL=info
 
 # Build and run
@@ -129,6 +154,17 @@ All configuration is done via environment variables:
 | `WORKLOAD_METRICS_BATCH_SIZE` | `100` | Maximum BullMQ event stream entries read per `XREAD` call |
 | `WORKLOAD_METRICS_MAX_JOB_NAMES_PER_QUEUE` | `100` | Per-queue job-name label cardinality cap; additional names use `__other__` |
 | `WORKLOAD_METRICS_START_ID` | `$` | Initial BullMQ event stream ID; `$` starts with new events only |
+| `STORE_ENABLED` | `false` | Persist completed/failed jobs to the embedded SQLite history store (powers `/console` search) |
+| `STORE_DB_PATH` | `/data/history.db` | Path to the SQLite database file; its directory must be writable (mount a volume) |
+| `STORE_WRITE_BUFFER` | `4096` | Size of the in-memory write channel; records are dropped (and counted) when full |
+| `STORE_BATCH_SIZE` | `256` | Max records flushed per write transaction |
+| `STORE_FLUSH_MILLIS` | `500` | Max time a batch waits before being flushed |
+| `STORE_TRACE_KEYS` | (empty) | Comma-separated payload keys to derive a trace id from; falls back to flow-root/own job id |
+| `STORE_COMPLETED_TTL_HOURS` | `24` | Retention for non-failed history; `0` disables this tier |
+| `STORE_FAILED_TTL_HOURS` | `336` | Retention for failed history (default 14 days); `0` disables this tier |
+| `STORE_SWEEP_SECONDS` | `300` | Interval between retention sweeps |
+| `STORE_MAX_ROWS` | `0` | Optional hard cap on total history rows (newest kept); `0` disables the cap |
+| `STORE_READ_CONCURRENCY` | `16` | Max concurrent search/detail reads; excess requests get HTTP 503 |
 | `LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
 
 Sentinel behavior:
@@ -143,6 +179,12 @@ Sentinel behavior:
 - `GET /queue/<name>` - Single-queue detail view
 - `GET /queue/jobs?queue=<name>&state=<state>` - Job list for a queue/state
 - `GET /job/detail?queue=<name>&id=<id>` - Job detail (JSON)
+- `GET /console` - Full-text search console (only when `STORE_ENABLED=true`)
+
+### Search API (JSON)
+Available when `STORE_ENABLED=true`; backs the `/console` UI and is safe to call directly.
+- `GET /v1/search?q=&name=&state=&trace_id=&since_ms=&limit=` - Search persisted history (requires at least one of `q`/`name`/`state`/`trace_id`; returns `400` otherwise, `503` when the reader is saturated)
+- `GET /v1/jobs/{id}` - Full persisted detail for one job (`404` if it has aged out of retention)
 
 ### Operations
 - `GET /health` or `/healthz` - Health check (liveness probe)
@@ -342,7 +384,7 @@ echo $GITHUB_TOKEN | helm registry login ghcr.io -u kofno --password-stdin
 
 # Install from OCI chart
 helm install bull-der-dash oci://ghcr.io/kofno/charts/bull-der-dash \
-  --version 0.0.2 \
+  --version 0.2.0 \
   --namespace mynamespace \
   --create-namespace \
   --set image.repository=ghcr.io/kofno/bull-der-dash
@@ -360,6 +402,31 @@ env:
       key: redis-password
 ```
 
+### Persistent job history (SQLite)
+
+To enable the `/console` search UI, turn on the store and give it a volume. Because
+SQLite is a single writer, the chart provisions a single `ReadWriteOnce` PVC and
+switches the Deployment to the `Recreate` strategy so a rollout never leaves two
+pods contending for the same volume.
+
+```yaml
+env:
+  store:
+    enabled: true
+    # dbPath lives under persistence.mountPath so it lands on the volume
+    dbPath: /data/history.db
+    failedTtlHours: 336   # keep failures 14 days
+    completedTtlHours: 24 # keep successes 1 day
+    # traceKeys: "traceId,trace_id"  # optional payload keys for trace lineage
+
+persistence:
+  enabled: true
+  mountPath: /data
+  size: 5Gi
+  # storageClass: ""        # "" uses the cluster default; "-" forces no class
+  # existingClaim: ""       # reuse a pre-created PVC instead of provisioning one
+```
+
 ## Development 🛠️
 
 ### Project Structure
@@ -374,6 +441,8 @@ env:
 1. **New metrics**: Add to `internal/metrics/metrics.go`
 2. **New endpoints**: Add handlers to `internal/web/handlers.go`
 3. **New Redis queries**: Add methods to `internal/explorer/explorer.go`
+4. **New search/history fields**: Add to the schema and queries in `internal/store/store.go`
+5. **Console UI changes**: Edit `internal/web/assets/console.html` (embedded via `go:embed`)
 
 ### BullMQ Data Structures
 
@@ -405,11 +474,10 @@ Bull-der-dash is designed for efficiency:
 
 Contributions welcome! Areas of focus:
 
-1. **Search Implementation**: Bluge integration for job search
-2. **Actions**: Porting BullMQ Lua scripts for job manipulation
-3. **UI Polish**: Better visualizations and user experience
-4. **Testing**: Unit and integration tests
-5. **Documentation**: Expanded guides and examples
+1. **Actions**: Porting BullMQ Lua scripts for job manipulation
+2. **UI Polish**: Better visualizations and search console UX
+3. **Testing**: Unit and integration tests
+4. **Documentation**: Expanded guides and examples
 
 ## License
 
@@ -418,5 +486,4 @@ MIT (see `LICENSE`)
 ## Acknowledgments
 
 - [BullMQ](https://github.com/taskforcesh/bullmq) - The excellent Node.js queue library we're monitoring
-- [Bluge](https://github.com/blugelabs/bluge) - Planned search engine integration
-- [HTMX](https://htmx.org/) - Keeping the frontend simple and fast
+- [modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite) - Pure-Go, CGO-free SQLite (with FTS5) powering persistent history and search

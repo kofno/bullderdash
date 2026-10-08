@@ -100,6 +100,15 @@ You'll see Prometheus metrics for:
 3. Click "View Details →" on any job
 4. See full job data (JSON)
 
+#### Search Job History (optional)
+Enable the SQLite history store, then use the search console:
+```bash
+STORE_ENABLED=true STORE_DB_PATH=./history.db ./bullderdash.exe
+```
+Visit http://localhost:8080/console to full-text search completed/failed jobs by
+name, trace id, last error, or payload — with trace-lineage drill-down and
+single-job detail. Search reads from SQLite, so it never touches the live queue.
+
 #### Test Health Checks
 ```bash
 curl http://localhost:8080/health   # Should return: OK
@@ -154,6 +163,14 @@ export QUEUE_PREFIX=bull
 export METRICS_POLL_SECONDS=10
 export DASHBOARD_REFRESH_TIMEOUT_SECONDS=30
 export LOG_LEVEL=info
+
+# Job history + search console (optional)
+export STORE_ENABLED=false
+export STORE_DB_PATH=/data/history.db
+export STORE_COMPLETED_TTL_HOURS=24
+export STORE_FAILED_TTL_HOURS=336
+export STORE_SWEEP_SECONDS=300
+export STORE_READ_CONCURRENCY=16
 ```
 
 ## Docker Quick Start
@@ -181,7 +198,7 @@ echo $GITHUB_TOKEN | helm registry login ghcr.io -u kofno --password-stdin
 
 # Install from OCI chart
 helm install bull-der-dash oci://ghcr.io/kofno/charts/bull-der-dash \
-  --version 0.0.2 \
+  --version 0.2.0 \
   --namespace bull-der-dash \
   --create-namespace \
   --set image.repository=ghcr.io/kofno/bull-der-dash
@@ -196,12 +213,25 @@ kubectl port-forward svc/bull-der-dash 8080:80
 kubectl logs -l app.kubernetes.io/name=bull-der-dash -f
 ```
 
+To enable the search console in Kubernetes, turn on persistence and the store
+(the chart provisions a single RWO PVC and switches to the `Recreate` strategy):
+
+```bash
+helm install bull-der-dash oci://ghcr.io/kofno/charts/bull-der-dash \
+  --version 0.2.0 \
+  --namespace bull-der-dash --create-namespace \
+  --set image.repository=ghcr.io/kofno/bull-der-dash \
+  --set env.store.enabled=true \
+  --set persistence.enabled=true \
+  --set persistence.size=5Gi
+```
+
 ## Next Steps
 
 1. ✅ Verify you see your queues
 2. 📊 Set up Prometheus scraping (if using)
-3. 🔍 Plan your search implementation (Bluge)
-4. 🎨 Customize the UI (Tailwind classes in handlers.go)
+3. 🔍 Enable the history store (`STORE_ENABLED=true`) and explore `/console` search
+4. 🎨 Customize the UI (Tailwind classes in handlers.go; console in `internal/web/assets/console.html`)
 5. 🚀 Add more features!
 
 ## Need Help?
