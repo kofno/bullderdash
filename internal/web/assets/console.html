@@ -59,6 +59,22 @@
     letter-spacing: 0.4px;
     color: var(--muted);
   }
+  .field label.check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    text-transform: none;
+    letter-spacing: normal;
+    font-size: 13px;
+    color: var(--text);
+    padding: 7px 0;
+  }
+  .field label.check input {
+    width: auto;
+    padding: 0;
+    margin: 0;
+    accent-color: var(--accent);
+  }
   input, select, button {
     font: inherit;
     color: var(--text);
@@ -302,6 +318,10 @@
       <input id="trace_id" name="trace_id" type="text" placeholder="exact trace id" autocomplete="off">
     </div>
     <div class="field">
+      <label for="errored">Errored</label>
+      <label class="check"><input id="errored" name="errored" type="checkbox"> retried or has error</label>
+    </div>
+    <div class="field">
       <label for="window">Finished within</label>
       <select id="window" name="window">
         <option value="300000">5m</option>
@@ -374,6 +394,7 @@
     name: document.getElementById("name"),
     state: document.getElementById("state"),
     trace: document.getElementById("trace_id"),
+    errored: document.getElementById("errored"),
     window: document.getElementById("window"),
     limit: document.getElementById("limit"),
     reset: document.getElementById("reset"),
@@ -442,6 +463,7 @@
     if (name) { params.set("name", name); }
     if (state) { params.set("state", state); }
     if (trace) { params.set("trace_id", trace); }
+    if (els.errored.checked) { params.set("errored", "true"); }
     if (win && win !== "all") {
       var n = parseInt(win, 10);
       if (isFinite(n) && n > 0) { params.set("since_ms", String(Date.now() - n)); }
@@ -456,7 +478,7 @@
   // the server contract which 400s a since_ms-only query.
   function hasPredicate(params) {
     return params.has("q") || params.has("name") || params.has("state") ||
-      params.has("trace_id");
+      params.has("trace_id") || params.has("errored");
   }
 
   // Create a clickable trace-id cell that drills into the lineage for that trace.
@@ -845,6 +867,7 @@
     els.name.value = "";
     els.state.value = "";
     els.trace.value = "";
+    els.errored.checked = false;
     els.window.value = "all";
     els.limit.value = "100";
     clearRows();

@@ -39,3 +39,10 @@ Thumbs.db
 # Build output
 dist/
 build/
+
+# Local SQLite job-history store (dev/demo default STORE_DB_PATH=./history.db)
+history.db
+history.db-shm
+history.db-wal
+*.db-shm
+*.db-wal

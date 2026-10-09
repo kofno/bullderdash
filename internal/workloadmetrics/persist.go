@@ -99,7 +99,7 @@ func (c *Collector) buildRecord(ctx context.Context, queue, jobID, result string
 		Queue:        queue,
 		Name:         data["name"],
 		State:        result,
-		Attempts:     int(parseIntDefault(data["attemptsMade"], 0)),
+		Attempts:     int(attemptsMade(data)),
 		CreatedAtMs:  parseIntDefault(data["timestamp"], 0),
 		FinishedAtMs: parseIntDefault(data["finishedOn"], 0),
 		LastError:    data["failedReason"],
@@ -268,4 +268,16 @@ func parseIntDefault(s string, def int64) int64 {
 		return def
 	}
 	return v
+}
+
+// attemptsMade reads the BullMQ attempt counter from a job hash. BullMQ v5
+// stores it as the abbreviated "atm" field; older releases used the long
+// "attemptsMade" name. We honor "atm" first and fall back so the persisted
+// attempt count is correct across versions — including jobs that failed one or
+// more attempts before finally completing.
+func attemptsMade(data map[string]string) int64 {
+	if v := strings.TrimSpace(data["atm"]); v != "" {
+		return parseIntDefault(v, 0)
+	}
+	return parseIntDefault(data["attemptsMade"], 0)
 }

@@ -130,3 +130,38 @@ func TestBuildRecordStandaloneNoTraceKey(t *testing.T) {
 		t.Fatalf("expected self-trace, got trace=%q depth=%d", rec.TraceID, rec.ExecutionDepth)
 	}
 }
+
+func TestAttemptsMade(t *testing.T) {
+	cases := []struct {
+		name string
+		data map[string]string
+		want int64
+	}{
+		{"atm preferred", map[string]string{"atm": "2", "attemptsMade": "0"}, 2},
+		{"attemptsMade fallback", map[string]string{"attemptsMade": "3"}, 3},
+		{"atm blank falls back", map[string]string{"atm": "", "attemptsMade": "1"}, 1},
+		{"neither present", map[string]string{}, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := attemptsMade(tc.data); got != tc.want {
+				t.Fatalf("attemptsMade=%d want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// A retried-then-completed BullMQ job carries the attempt count in the "atm"
+// field; the record must reflect it rather than defaulting to 0.
+func TestBuildRecordReadsAtmAttempts(t *testing.T) {
+	c := &Collector{cfg: Config{QueuePrefix: "bull"}, lineage: newLineageCache(0)}
+	data := map[string]string{
+		"name":        "emails",
+		"atm":         "2",
+		"returnvalue": `"ok"`,
+	}
+	rec := c.buildRecord(context.Background(), "emails", "job-9", "completed", data)
+	if rec.Attempts != 2 {
+		t.Fatalf("expected attempts=2 from atm, got %d", rec.Attempts)
+	}
+}

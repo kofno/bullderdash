@@ -68,6 +68,7 @@ type SearchParams struct {
 	Name    string // exact job name
 	State   string // exact state
 	TraceID string // exact trace id (lineage drill-down)
+	Errored bool   // when true, restrict to jobs that recorded an error or retried (last_error <> '' OR attempts > 1)
 	SinceMs int64  // finished_at >= SinceMs when > 0
 	Limit   int
 }
@@ -379,6 +380,9 @@ func (s *Store) Search(ctx context.Context, p SearchParams) ([]SearchRow, error)
 	if p.TraceID != "" {
 		sb.WriteString(` AND jh.trace_id = ?`)
 		args = append(args, p.TraceID)
+	}
+	if p.Errored {
+		sb.WriteString(` AND (jh.last_error <> '' OR jh.attempts > 1)`)
 	}
 	if p.SinceMs > 0 {
 		sb.WriteString(` AND jh.finished_at >= ?`)

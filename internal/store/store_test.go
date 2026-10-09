@@ -120,6 +120,37 @@ func TestStoreLifecycle(t *testing.T) {
 	}
 }
 
+func TestSearchErroredFilter(t *testing.T) {
+	s := newTestStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Run(ctx)
+
+	now := time.Now().UnixMilli()
+	// Clean completion: single attempt, no error -> excluded by errored filter.
+	s.Enqueue(Record{ID: "clean", Queue: "q", Name: "n", State: "completed", Attempts: 1, FinishedAtMs: now, Data: `{"k":1}`})
+	// Retried then completed: attempts > 1, no error -> included.
+	s.Enqueue(Record{ID: "retried", Queue: "q", Name: "n", State: "completed", Attempts: 2, FinishedAtMs: now, Data: `{"k":2}`})
+	// Errored then completed: attempts 1 but carries last_error -> included.
+	s.Enqueue(Record{ID: "errored", Queue: "q", Name: "n", State: "completed", Attempts: 1, LastError: "boom", FinishedAtMs: now, Data: `{"k":3}`})
+
+	waitForID(t, s, SearchParams{Errored: true}, "retried")
+	rows, err := s.Search(ctx, SearchParams{Errored: true})
+	if err != nil {
+		t.Fatalf("Search errored: %v", err)
+	}
+	got := map[string]bool{}
+	for _, r := range rows {
+		got[r.ID] = true
+	}
+	if got["clean"] {
+		t.Fatalf("clean completion must be excluded by errored filter: %+v", rows)
+	}
+	if !got["retried"] || !got["errored"] {
+		t.Fatalf("errored filter must include retried and errored jobs: %+v", rows)
+	}
+}
+
 func TestSweepFailedTTLAndMaxRows(t *testing.T) {
 	s := newTestStore(t)
 	ctx, cancel := context.WithCancel(context.Background())

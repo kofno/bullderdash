@@ -31,6 +31,13 @@ bun run index.ts
 ```bash
 # Specify which queues to create (default: orders,emails,billing)
 QUEUES=orders,emails,billing,payments bun run index.ts
+
+# Retries per job before a job is permanently FAILED (default: 3)
+MAX_ATTEMPTS=2 bun run index.ts
+
+# Scale every job type's per-attempt failure rate (default: 1)
+# e.g. 2 doubles failure rates to surface more FAILED jobs quickly
+FAIL_RATE_MULTIPLIER=2 bun run index.ts
 ```
 
 ## Job Types
@@ -43,6 +50,12 @@ QUEUES=orders,emails,billing,payments bun run index.ts
 | `database-sync` | 3% | 2.8s | Database operations |
 | `report-generate` | 6% | 6s | Longer-running |
 | `order-finalize` | 2% | 2.5s | Parent job for flows |
+| `flaky-task` | 70% | 1.2s | Deliberately flaky — reliably exhausts retries into `FAILED` |
+
+> `flaky-task` exists so the `FAILED` category (and multi-attempt
+> retried-then-completed jobs) populate quickly. With the default
+> `MAX_ATTEMPTS=3`, roughly `0.7^3 ≈ 34%` of flaky jobs fail permanently while
+> the rest complete after 1–2 retries, exercising the attempt counter.
 
 ## Flow Simulation
 
@@ -60,6 +73,8 @@ Profiles and job mix live in `scripts/sim/index.ts`:
 - `burstChance` and `burstMultiplier` control spikes
 
 If you want higher load, reduce `meanIntervalMs` or increase `concurrency`.
+To see more `FAILED` jobs without editing code, raise `FAIL_RATE_MULTIPLIER`
+or lower `MAX_ATTEMPTS`.
 
 ## Troubleshooting
 

@@ -65,8 +65,9 @@ func (a *SearchAPI) SearchHandler() http.HandlerFunc {
 		name := strings.TrimSpace(r.URL.Query().Get("name"))
 		state := strings.TrimSpace(r.URL.Query().Get("state"))
 		traceID := strings.TrimSpace(r.URL.Query().Get("trace_id"))
-		if q == "" && name == "" && state == "" && traceID == "" {
-			writeJSONError(w, http.StatusBadRequest, "at least one of q, name, state or trace_id is required")
+		errored := parseBool(r.URL.Query().Get("errored"))
+		if q == "" && name == "" && state == "" && traceID == "" && !errored {
+			writeJSONError(w, http.StatusBadRequest, "at least one of q, name, state, trace_id or errored is required")
 			return
 		}
 
@@ -75,6 +76,7 @@ func (a *SearchAPI) SearchHandler() http.HandlerFunc {
 			Name:    name,
 			State:   state,
 			TraceID: traceID,
+			Errored: errored,
 			SinceMs: parseInt64(r.URL.Query().Get("since_ms")),
 			Limit:   parseIntDefault(r.URL.Query().Get("limit"), 0),
 		}
@@ -152,4 +154,15 @@ func parseIntDefault(s string, def int) int {
 		return def
 	}
 	return v
+}
+
+// parseBool interprets the common truthy query-string spellings (true/1/yes/on)
+// case-insensitively. Anything else (including empty) is false.
+func parseBool(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
