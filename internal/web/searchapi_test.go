@@ -39,11 +39,27 @@ func (f *fakeReader) Get(ctx context.Context, id string) (*store.JobDetail, erro
 
 func TestSearchHandlerRequiresPredicate(t *testing.T) {
 	api := NewSearchAPI(&fakeReader{}, 4)
-	req := httptest.NewRequest(http.MethodGet, "/v1/search?since_ms=10&limit=5", nil)
+	// limit alone is not a predicate -> 400.
+	req := httptest.NewRequest(http.MethodGet, "/v1/search?limit=5", nil)
 	rec := httptest.NewRecorder()
 	api.SearchHandler()(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for no predicate, got %d", rec.Code)
+	}
+}
+
+func TestSearchHandlerSinceMsIsPredicate(t *testing.T) {
+	fr := &fakeReader{rows: []store.SearchRow{{ID: "j1"}}}
+	api := NewSearchAPI(fr, 4)
+	// A finished-within window alone is a valid standalone predicate.
+	req := httptest.NewRequest(http.MethodGet, "/v1/search?since_ms=10&limit=5", nil)
+	rec := httptest.NewRecorder()
+	api.SearchHandler()(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for since_ms-only query, got %d", rec.Code)
+	}
+	if fr.lastP.SinceMs != 10 {
+		t.Fatalf("since_ms not threaded: %+v", fr.lastP)
 	}
 }
 

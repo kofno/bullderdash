@@ -305,10 +305,7 @@
     <div class="field">
       <label for="state">State</label>
       <select id="state" name="state">
-        <option value="">any</option>
-        <option value="Waiting">Waiting</option>
-        <option value="Delayed">Delayed</option>
-        <option value="Active">Active</option>
+        <option value="">any (Completed / Failed)</option>
         <option value="Completed">Completed</option>
         <option value="Failed">Failed</option>
       </select>
@@ -478,7 +475,7 @@
   // the server contract which 400s a since_ms-only query.
   function hasPredicate(params) {
     return params.has("q") || params.has("name") || params.has("state") ||
-      params.has("trace_id") || params.has("errored");
+      params.has("trace_id") || params.has("errored") || params.has("since_ms");
   }
 
   // Create a clickable trace-id cell that drills into the lineage for that trace.
@@ -579,7 +576,7 @@
       clearRows();
       hideEmpty();
       els.count.textContent = "";
-      setNotice("info", "Add at least one filter (search text, name, state, or trace) to run a query.");
+      setNotice("info", "Add at least one filter (search text, name, state, trace, errored, or a finished-within window) to run a query.");
       return;
     }
     setNotice("");
@@ -879,7 +876,7 @@
   els.clearLineage.addEventListener("click", exitLineage);
 
   // Initial state: guide the operator to add a filter.
-  setNotice("info", "Add at least one filter (search text, name, state, or trace) to run a query.");
+  setNotice("info", "Add at least one filter (search text, name, state, trace, errored, or a finished-within window) to run a query.");
 
   // Reopen a deep-linked job detail (#job/<id>) on load.
   onHashChange();

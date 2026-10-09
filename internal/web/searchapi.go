@@ -52,8 +52,9 @@ func (a *SearchAPI) acquire() bool {
 
 func (a *SearchAPI) release() { <-a.sem }
 
-// SearchHandler implements GET /v1/search. At least one of q, name, state or
-// trace_id must be supplied (since_ms/limit alone are not predicates), else 400.
+// SearchHandler implements GET /v1/search. At least one of q, name, state,
+// trace_id, errored or since_ms must be supplied (limit alone is not a
+// predicate), else 400.
 func (a *SearchAPI) SearchHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -66,8 +67,9 @@ func (a *SearchAPI) SearchHandler() http.HandlerFunc {
 		state := strings.TrimSpace(r.URL.Query().Get("state"))
 		traceID := strings.TrimSpace(r.URL.Query().Get("trace_id"))
 		errored := parseBool(r.URL.Query().Get("errored"))
-		if q == "" && name == "" && state == "" && traceID == "" && !errored {
-			writeJSONError(w, http.StatusBadRequest, "at least one of q, name, state, trace_id or errored is required")
+		sinceMs := parseInt64(r.URL.Query().Get("since_ms"))
+		if q == "" && name == "" && state == "" && traceID == "" && !errored && sinceMs <= 0 {
+			writeJSONError(w, http.StatusBadRequest, "at least one of q, name, state, trace_id, errored or since_ms is required")
 			return
 		}
 
@@ -77,7 +79,7 @@ func (a *SearchAPI) SearchHandler() http.HandlerFunc {
 			State:   state,
 			TraceID: traceID,
 			Errored: errored,
-			SinceMs: parseInt64(r.URL.Query().Get("since_ms")),
+			SinceMs: sinceMs,
 			Limit:   parseIntDefault(r.URL.Query().Get("limit"), 0),
 		}
 
