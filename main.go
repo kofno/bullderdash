@@ -145,7 +145,15 @@ func main() {
 	mux.HandleFunc("/queue/summary", web.QueueSummaryHandler(exp, cfg.QueuePrefix))
 	mux.HandleFunc("/queue/", web.QueueDetailHandler(exp, cfg.QueuePrefix))
 	mux.HandleFunc("/job/detail", web.JobDetailHandler(exp))
-	mux.HandleFunc("/search", web.SearchPageHandler(exp, cfg.QueuePrefix, dashboardCache))
+	// Legacy live-Redis search has been removed in favor of the SQLite-backed
+	// console. Redirect old bookmarks to the console (or home if disabled).
+	mux.HandleFunc("/search", func(w http.ResponseWriter, r *http.Request) {
+		if web.ConsoleEnabled {
+			http.Redirect(w, r, "/console", http.StatusFound)
+			return
+		}
+		http.Redirect(w, r, "/", http.StatusFound)
+	})
 
 	// SQLite-backed console JSON API (AnvilMQ console contract).
 	if jobStore != nil {

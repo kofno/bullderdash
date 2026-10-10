@@ -152,7 +152,6 @@ func JobListHandler(exp *explorer.Explorer) http.HandlerFunc {
 
 		queueName := r.URL.Query().Get("queue")
 		state := r.URL.Query().Get("state")
-		query := strings.TrimSpace(r.URL.Query().Get("q"))
 		if queueName == "" || state == "" {
 			http.Error(w, "queue and state parameters required", http.StatusBadRequest)
 			return
@@ -160,8 +159,6 @@ func JobListHandler(exp *explorer.Explorer) http.HandlerFunc {
 
 		displayState := state
 		page := parsePositiveInt(r.URL.Query().Get("page"), 1)
-		searchWindowValue := r.URL.Query().Get("since")
-		window := parseSearchWindow(searchWindowValue, time.Now())
 		offset := 0
 		limit := statePageSize
 		searchedJobs := 0
@@ -171,14 +168,6 @@ func JobListHandler(exp *explorer.Explorer) http.HandlerFunc {
 		var err error
 
 		switch {
-		case query != "":
-			displayState = "all"
-			var results searchResults
-			results, err = searchJobsAcrossStates(r.Context(), exp, queueName, query, page, window)
-			jobs = results.Jobs
-			searchedJobs = results.SearchedJobs
-			windowLabel = results.WindowLabel
-			hasNextPage = results.HasNextPage
 		case state == "all":
 			displayState = "all"
 			limit = allStatesPageSize
@@ -200,29 +189,23 @@ func JobListHandler(exp *explorer.Explorer) http.HandlerFunc {
 		}
 
 		data := struct {
-			Queue         string
-			State         string
-			Query         string
-			SearchWindow  string
-			WindowOptions []searchWindowOption
-			Jobs          []explorer.JobSummary
-			Page          int
-			HasPrevPage   bool
-			HasNextPage   bool
-			WindowLabel   string
-			SearchedJobs  int
+			Queue        string
+			State        string
+			Jobs         []explorer.JobSummary
+			Page         int
+			HasPrevPage  bool
+			HasNextPage  bool
+			WindowLabel  string
+			SearchedJobs int
 		}{
-			Queue:         queueName,
-			State:         displayState,
-			Query:         query,
-			SearchWindow:  window.Value,
-			WindowOptions: searchWindowOptions,
-			Jobs:          jobs,
-			Page:          page,
-			HasPrevPage:   page > 1,
-			HasNextPage:   hasNextPage,
-			WindowLabel:   windowLabel,
-			SearchedJobs:  searchedJobs,
+			Queue:        queueName,
+			State:        displayState,
+			Jobs:         jobs,
+			Page:         page,
+			HasPrevPage:  page > 1,
+			HasNextPage:  hasNextPage,
+			WindowLabel:  windowLabel,
+			SearchedJobs: searchedJobs,
 		}
 
 		if r.Header.Get("HX-Request") != "" {
@@ -328,47 +311,6 @@ const jobListTmpl = `
         </div>
     </div>
 
-    <form class="flex flex-wrap items-end gap-3" method="get" action="/queue/jobs">
-        <input type="hidden" name="queue" value="{{.Data.Queue}}">
-        <input type="hidden" name="state" value="{{.Data.State}}">
-        <label class="flex flex-col text-xs uppercase tracking-wide text-gray-400">
-            Search Jobs
-            <span class="mt-1 text-[10px] normal-case text-gray-400">Searches across states with a bounded scan depth</span>
-            <input
-                type="text"
-                name="q"
-                value="{{.Data.Query}}"
-                placeholder="Job ID or name (all states)"
-                class="mt-1 w-64 rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            />
-        </label>
-        <label class="flex flex-col text-xs uppercase tracking-wide text-gray-400">
-            Time Window
-            <select
-                name="since"
-                class="mt-1 h-10 rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            >
-                {{range .Data.WindowOptions}}
-                <option value="{{.Value}}" {{if eq $.Data.SearchWindow .Value}}selected{{end}}>{{.Label}}</option>
-                {{end}}
-            </select>
-        </label>
-        <button
-            type="submit"
-            class="h-9 rounded-md bg-indigo-600 px-4 text-sm font-medium text-white hover:bg-indigo-700"
-        >
-            Search
-        </button>
-        {{if .Data.Query}}
-        <a
-            href="/queue/jobs?queue={{.Data.Queue}}&state={{.Data.State}}"
-            class="h-9 rounded-md border border-gray-300 px-3 text-sm font-medium text-gray-600 hover:text-gray-900 flex items-center"
-        >
-            Clear
-        </a>
-        {{end}}
-    </form>
-
     {{if .Data.WindowLabel}}
     <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">
         <span>{{.Data.WindowLabel}}</span>
@@ -409,11 +351,7 @@ const jobListTmpl = `
     </div>
     {{else}}
     <div class="text-center py-12 text-gray-500 border border-dashed border-gray-200 rounded-lg">
-        {{if .Data.Query}}
-            No jobs matching "{{.Data.Query}}" in this search window
-        {{else}}
-            No jobs in {{.Data.State}} state
-        {{end}}
+        No jobs in {{.Data.State}} state
     </div>
     {{end}}
 
@@ -422,7 +360,7 @@ const jobListTmpl = `
         <div class="flex items-center gap-3">
             {{if .Data.HasPrevPage}}
             <a
-                href="/queue/jobs?queue={{.Data.Queue}}&state={{.Data.State}}&q={{.Data.Query}}&since={{.Data.SearchWindow}}&page={{sub .Data.Page 1}}"
+                href="/queue/jobs?queue={{.Data.Queue}}&state={{.Data.State}}&page={{sub .Data.Page 1}}"
                 class="rounded-md border border-gray-300 px-3 py-2 font-medium text-gray-600 hover:text-gray-900"
             >
                 Previous
@@ -430,7 +368,7 @@ const jobListTmpl = `
             {{end}}
             {{if .Data.HasNextPage}}
             <a
-                href="/queue/jobs?queue={{.Data.Queue}}&state={{.Data.State}}&q={{.Data.Query}}&since={{.Data.SearchWindow}}&page={{add .Data.Page 1}}"
+                href="/queue/jobs?queue={{.Data.Queue}}&state={{.Data.State}}&page={{add .Data.Page 1}}"
                 class="rounded-md border border-gray-300 px-3 py-2 font-medium text-gray-600 hover:text-gray-900"
             >
                 Next
@@ -501,48 +439,6 @@ const homeContentTmpl = `
 </div>
 `
 
-const searchPageTmpl = `
-<div class="space-y-6">
-    <div>
-        <div class="text-sm uppercase tracking-wide text-gray-400">Search Jobs</div>
-        <div class="text-xl font-semibold text-indigo-700">Find jobs across states</div>
-        <div class="mt-1 text-sm text-gray-500">Searches a paged window from each state so results stay fast on large queues.</div>
-    </div>
-
-    <form class="flex flex-wrap items-end gap-4" method="get" action="/queue/jobs">
-        <label class="flex flex-col text-xs uppercase tracking-wide text-gray-400">
-            Queue
-            <select
-                name="queue"
-                class="mt-1 w-64 rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                required
-            >
-                {{range .Data.Queues}}
-                <option value="{{.}}" {{if eq . $.Data.SelectedQueue}}selected{{end}}>{{.}}</option>
-                {{end}}
-            </select>
-        </label>
-        <input type="hidden" name="state" value="all">
-        <label class="flex flex-col text-xs uppercase tracking-wide text-gray-400">
-            Query
-            <input
-                type="text"
-                name="q"
-                value="{{.Data.Query}}"
-                placeholder="Job ID, name, data, opts, failed reason"
-                class="mt-1 w-80 rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-800 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            />
-        </label>
-        <button
-            type="submit"
-            class="h-9 rounded-md bg-indigo-600 px-4 text-sm font-medium text-white hover:bg-indigo-700"
-        >
-            Search
-        </button>
-    </form>
-</div>
-`
-
 func renderShell(w http.ResponseWriter, title, subtitle, navActive, contentTmpl string, data interface{}) error {
 	tmpl, err := template.New("shell").Funcs(template.FuncMap{
 		"add": func(a, b int) int { return a + b },
@@ -594,42 +490,7 @@ func HomeHandler() http.HandlerFunc {
 	}
 }
 
-// SearchPageHandler renders a global search form with queue selection
-func SearchPageHandler(exp *explorer.Explorer, prefix string, cache *DashboardCache) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		snapshot := cache.Get()
-		queues := snapshot.Queues
-		if len(queues) == 0 {
-			if err := RefreshDashboardCache(r.Context(), exp, prefix, cache); err != nil {
-				log.Printf("❌ DiscoverQueues error (search): %v", err)
-				http.Error(w, fmt.Sprintf("DiscoverQueues error: %v", err), http.StatusInternalServerError)
-				return
-			}
-			queues = cache.Get().Queues
-		}
-		selectedQueue := strings.TrimSpace(r.URL.Query().Get("queue"))
-		query := strings.TrimSpace(r.URL.Query().Get("q"))
-		if selectedQueue == "" && len(queues) > 0 {
-			selectedQueue = queues[0]
-		}
-		data := struct {
-			Queues        []string
-			SelectedQueue string
-			Query         string
-		}{
-			Queues:        queues,
-			SelectedQueue: selectedQueue,
-			Query:         query,
-		}
-		err := renderShell(w, "Bull-der-dash - Search", "Search jobs across states in paged windows", "", searchPageTmpl, data)
-		if err != nil {
-			log.Printf("❌ renderShell error (search): %v", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-	}
-}
-
+// queueDetailPageData describes the queue detail view payload.
 type queueDetailPageData struct {
 	Stat            explorer.QueueStats
 	SummaryHTML     template.HTML
