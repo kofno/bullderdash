@@ -4,6 +4,13 @@ import { FlowProducer, Queue, Worker } from 'bullmq';
 const connection = { host: '127.0.0.1', port: 6379 };
 const queueNames = (process.env.QUEUES || 'orders,emails,billing').split(',');
 
+// Tunables so the sim can be dialed up to exercise retries and permanent
+// failures without editing code:
+//   MAX_ATTEMPTS          retries per job before a job is permanently FAILED (default 3)
+//   FAIL_RATE_MULTIPLIER  scales every job type's per-attempt failRate (default 1)
+const maxAttempts = Math.max(1, parseInt(process.env.MAX_ATTEMPTS || '3', 10) || 3);
+const failMultiplier = Math.max(0, parseFloat(process.env.FAIL_RATE_MULTIPLIER || '1') || 1);
+
 // Enhanced job type configurations with more realistic patterns
 const jobTypes = [
   {
@@ -42,6 +49,12 @@ const jobTypes = [
     delayMs: 2500,         // Takes 2.5 seconds
     description: 'Finalize order after children complete'
   },
+  {
+    name: 'flaky-task',
+    failRate: 0.7,         // 70% per-attempt failure — reliably exhausts retries into FAILED
+    delayMs: 1200,         // Fast so failures surface quickly
+    description: 'Deliberately flaky task to exercise retry + failed states'
+  },
 ];
 
 type JobMix = { name: string; weight: number; priority?: number };
@@ -64,6 +77,7 @@ const defaultProfile: QueueProfile = {
     { name: 'webhook-call', weight: 20, priority: 1 },
     { name: 'database-sync', weight: 15 },
     { name: 'report-generate', weight: 10 },
+    { name: 'flaky-task', weight: 8 },
   ],
 };
 
@@ -79,6 +93,7 @@ const queueProfiles: Record<string, QueueProfile> = {
       { name: 'webhook-call', weight: 20, priority: 1 },
       { name: 'send-email', weight: 15, priority: 2 },
       { name: 'report-generate', weight: 5 },
+      { name: 'flaky-task', weight: 8 },
     ],
   },
   emails: {
@@ -90,6 +105,7 @@ const queueProfiles: Record<string, QueueProfile> = {
       { name: 'webhook-call', weight: 20, priority: 1 },
       { name: 'process-data', weight: 15 },
       { name: 'report-generate', weight: 5 },
+      { name: 'flaky-task', weight: 8 },
     ],
   },
   billing: {
@@ -104,6 +120,7 @@ const queueProfiles: Record<string, QueueProfile> = {
       { name: 'report-generate', weight: 20 },
       { name: 'webhook-call', weight: 10, priority: 1 },
       { name: 'send-email', weight: 5, priority: 2 },
+      { name: 'flaky-task', weight: 8 },
     ],
   },
 };
@@ -146,7 +163,7 @@ async function setupWorkers() {
         }
 
         // Randomly fail some jobs (for testing failure states)
-        if (Math.random() < jobType.failRate) {
+        if (Math.random() < Math.min(1, jobType.failRate * failMultiplier)) {
           const errors = [
             'Network timeout',
             'Invalid data format',
@@ -226,7 +243,7 @@ async function addJobsContinuously() {
       }
 
       const opts: any = {
-        attempts: 3,
+        attempts: maxAttempts,
         backoff: {
           type: 'exponential',
           delay: 3000,
@@ -369,15 +386,15 @@ async function simulate() {
   console.log(`  • Worker concurrency: 1 per queue (creates visible backlog)`);
   console.log(`  • Job processing time: 1.5-6 seconds each`);
   console.log(`  • New jobs added with per-queue rates + bursts`);
-  console.log(`  • Failure rates: 3-12% (realistic flakiness)`);
-  console.log(`  • Retry attempts: 3 per job`);
+  console.log(`  • Failure rates: 2-12% typical, plus a ~70% "flaky-task" (x${failMultiplier} multiplier)`);
+  console.log(`  • Retry attempts: ${maxAttempts} per job`);
   console.log(`  • Delayed jobs: 70% immediate, 20% 2-10s delay, 10% 15-45s delay`);
   console.log(`  • Prioritized jobs: enabled on selected job types`);
   console.log(`  • Paused queues: occasional short maintenance pauses`);
   console.log("\n📈 What you'll see:");
   console.log(`  ✅ Jobs in WAITING state (backlog building up)`);
   console.log(`  🚀 Jobs in ACTIVE state (currently processing)`);
-  console.log(`  ❌ Jobs in FAILED state (after 3 retry attempts)`);
+  console.log(`  ❌ Jobs in FAILED state (after ${maxAttempts} retry attempts)`);
   console.log(`  ✅ Jobs in COMPLETED state (before cleanup)`);
   console.log(`  ⏰ Jobs in DELAYED state (scheduled for later)`);
   console.log("\n");

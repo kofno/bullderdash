@@ -57,7 +57,40 @@ env:
     batchSize: 100
     maxJobNamesPerQueue: 100
     startId: "$"
+  # SQLite-backed job history store. When enabled, completed/failed jobs are
+  # persisted to an embedded SQLite database (with FTS5 full-text search) that
+  # powers the /console search UI and the /v1/search + /v1/jobs/{id} JSON API.
+  # Requires persistence (below) so the database survives pod restarts.
+  store:
+    enabled: false
+    dbPath: "/data/history.db"
+    writeBuffer: 4096
+    batchSize: 256
+    flushMillis: 500
+    # Comma-separated payload keys to derive a trace id from (e.g. "traceId,trace_id").
+    traceKeys: ""
+    completedTtlHours: 24
+    failedTtlHours: 336
+    sweepSeconds: 300
+    maxRows: 0
+    readConcurrency: 16
   logLevel: "info"
+
+# Persistent storage for the SQLite job-history database. Enable this whenever
+# env.store.enabled is true so history survives pod restarts/reschedules.
+# SQLite is a single writer, so this is a single ReadWriteOnce volume and the
+# Deployment uses the Recreate strategy to avoid two pods contending for it
+# during a rollout.
+persistence:
+  enabled: false
+  # Mount point for the volume; env.store.dbPath should live under this path.
+  mountPath: /data
+  # Use an existing PVC instead of letting the chart create one.
+  existingClaim: ""
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 2Gi
+  annotations: {}
 
 extraEnv: []
 extraEnvFrom: []

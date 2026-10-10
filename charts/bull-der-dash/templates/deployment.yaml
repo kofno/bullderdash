@@ -6,6 +6,11 @@ metadata:
     {{- include "bull-der-dash.labels" . | nindent 4 }}
 spec:
   replicas: 1
+  {{- if .Values.persistence.enabled }}
+  # SQLite is a single writer; avoid two pods mounting the RWO volume at once.
+  strategy:
+    type: Recreate
+  {{- end }}
   selector:
     matchLabels:
       {{- include "bull-der-dash.selectorLabels" . | nindent 6 }}
@@ -100,6 +105,28 @@ spec:
               value: {{ .Values.env.workloadMetrics.maxJobNamesPerQueue | quote }}
             - name: WORKLOAD_METRICS_START_ID
               value: {{ .Values.env.workloadMetrics.startId | quote }}
+            - name: STORE_ENABLED
+              value: {{ .Values.env.store.enabled | quote }}
+            - name: STORE_DB_PATH
+              value: {{ .Values.env.store.dbPath | quote }}
+            - name: STORE_WRITE_BUFFER
+              value: {{ .Values.env.store.writeBuffer | quote }}
+            - name: STORE_BATCH_SIZE
+              value: {{ .Values.env.store.batchSize | quote }}
+            - name: STORE_FLUSH_MILLIS
+              value: {{ .Values.env.store.flushMillis | quote }}
+            - name: STORE_TRACE_KEYS
+              value: {{ .Values.env.store.traceKeys | quote }}
+            - name: STORE_COMPLETED_TTL_HOURS
+              value: {{ .Values.env.store.completedTtlHours | quote }}
+            - name: STORE_FAILED_TTL_HOURS
+              value: {{ .Values.env.store.failedTtlHours | quote }}
+            - name: STORE_SWEEP_SECONDS
+              value: {{ .Values.env.store.sweepSeconds | quote }}
+            - name: STORE_MAX_ROWS
+              value: {{ .Values.env.store.maxRows | quote }}
+            - name: STORE_READ_CONCURRENCY
+              value: {{ .Values.env.store.readConcurrency | quote }}
             - name: LOG_LEVEL
               value: {{ .Values.env.logLevel | quote }}
             {{- with .Values.extraEnv }}
@@ -136,4 +163,15 @@ spec:
             failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+          {{- if .Values.persistence.enabled }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.persistence.mountPath }}
+          {{- end }}
+      {{- if .Values.persistence.enabled }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (printf "%s-data" (include "bull-der-dash.fullname" .)) }}
+      {{- end }}
 

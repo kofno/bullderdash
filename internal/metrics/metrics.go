@@ -171,4 +171,50 @@ var (
 		},
 		[]string{"operation"},
 	)
+
+	// Store (SQLite job history) metrics
+	StoreWritesTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "bullderdash_store_writes_total",
+			Help: "Total number of job records persisted to the SQLite history store",
+		},
+	)
+
+	StoreWritesDropped = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "bullderdash_store_writes_dropped_total",
+			Help: "Total number of job records dropped because the writer buffer was full",
+		},
+	)
+
+	StoreWriteErrors = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "bullderdash_store_write_errors_total",
+			Help: "Total number of failed job-history write batches",
+		},
+	)
+
+	StoreWriteBatchDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "bullderdash_store_write_batch_duration_seconds",
+			Help:    "Latency of SQLite job-history write batches",
+			Buckets: prometheus.DefBuckets,
+		},
+	)
+
+	StoreQueryDuration = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "bullderdash_store_query_duration_seconds",
+			Help:    "Latency of SQLite job-history read queries",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"operation"},
+	)
+
+	StoreSweepDeleted = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "bullderdash_store_sweep_deleted_total",
+			Help: "Total number of job-history rows removed by the retention sweeper",
+		},
+	)
 )

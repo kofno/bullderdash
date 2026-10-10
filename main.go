@@ -14,6 +14,7 @@ import (
 	"github.com/kofno/bullderdash/internal/config"
 	"github.com/kofno/bullderdash/internal/explorer"
 	"github.com/kofno/bullderdash/internal/metrics"
+	"github.com/kofno/bullderdash/internal/store"
 	"github.com/kofno/bullderdash/internal/web"
 	"github.com/kofno/bullderdash/internal/workloadmetrics"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -59,6 +60,14 @@ func normalizePath(path string) (string, bool) {
 		return "/queue/:name", true
 	case path == "/job/detail":
 		return "/job/detail", true
+	case path == "/v1/search":
+		return "/v1/search", true
+	case path == "/v1/stats/job-names":
+		return "/v1/stats/job-names", true
+	case strings.HasPrefix(path, "/v1/jobs/"):
+		return "/v1/jobs/:id", true
+	case path == "/console":
+		return "/console", true
 	case path == "/metrics":
 		return "/metrics", true
 	case path == "/health" || path == "/healthz":
@@ -100,6 +109,28 @@ func main() {
 	exp := explorer.New(rdb)
 	dashboardCache := web.NewDashboardCache()
 
+	// Optional SQLite-backed job history store (persistence, search, retention).
+	var jobStore *store.Store
+	storeCtx, stopStore := context.WithCancel(context.Background())
+	defer stopStore()
+	if cfg.StoreEnabled {
+		var err error
+		jobStore, err = store.New(store.Config{
+			Path:          cfg.StoreDBPath,
+			WriteBuffer:   cfg.StoreWriteBuffer,
+			BatchSize:     cfg.StoreBatchSize,
+			FlushInterval: time.Duration(cfg.StoreFlushMillis) * time.Millisecond,
+		})
+		if err != nil {
+			log.Fatalf("❌ Failed to open job history store at %s: %v", cfg.StoreDBPath, err)
+		}
+		go jobStore.Run(storeCtx)
+		log.Printf("🗃️  job history store enabled: path=%s buffer=%d batch=%d flush=%dms",
+			cfg.StoreDBPath, cfg.StoreWriteBuffer, cfg.StoreBatchSize, cfg.StoreFlushMillis)
+
+		startSweeper(storeCtx, jobStore, cfg)
+	}
+
 	// 3. Setup HTTP routes
 	mux := http.NewServeMux()
 
@@ -112,6 +143,16 @@ func main() {
 	mux.HandleFunc("/queue/", web.QueueDetailHandler(exp, cfg.QueuePrefix))
 	mux.HandleFunc("/job/detail", web.JobDetailHandler(exp))
 	mux.HandleFunc("/search", web.SearchPageHandler(exp, cfg.QueuePrefix, dashboardCache))
+
+	// SQLite-backed console JSON API (AnvilMQ console contract).
+	if jobStore != nil {
+		searchAPI := web.NewSearchAPI(jobStore, cfg.StoreReadConcurrency)
+		mux.HandleFunc("/v1/search", searchAPI.SearchHandler())
+		mux.HandleFunc("/v1/stats/job-names", searchAPI.JobNameStatsHandler())
+		mux.HandleFunc("/v1/jobs/", searchAPI.JobDetailHandler())
+		mux.HandleFunc("/console", web.ConsoleHandler())
+		web.ConsoleEnabled = true
+	}
 
 	// Health checks (K8s friendly)
 	mux.HandleFunc("/health", web.HealthHandler())
@@ -154,13 +195,18 @@ func main() {
 
 	workloadMetricsCtx, stopWorkloadMetrics := context.WithCancel(context.Background())
 	if cfg.WorkloadMetricsEnabled {
-		collector := workloadmetrics.New(rdb, exp, workloadmetrics.Config{
+		var collectorStore workloadmetrics.JobStore
+		if jobStore != nil {
+			collectorStore = jobStore
+		}
+		collector := workloadmetrics.New(rdb, exp, collectorStore, workloadmetrics.Config{
 			QueuePrefix:         cfg.QueuePrefix,
 			PollInterval:        time.Duration(cfg.WorkloadMetricsPollSeconds) * time.Second,
 			BlockTimeout:        time.Duration(cfg.WorkloadMetricsBlockSeconds) * time.Second,
 			BatchSize:           int64(cfg.WorkloadMetricsBatchSize),
 			MaxJobNamesPerQueue: cfg.WorkloadMetricsMaxJobNames,
 			StartID:             cfg.WorkloadMetricsStartID,
+			TraceIDKeys:         cfg.StoreTraceKeys,
 		})
 		go collector.Run(workloadMetricsCtx)
 		log.Printf("📈 workload metrics collector enabled: poll=%ds block=%ds batch=%d maxJobNamesPerQueue=%d startID=%s",
@@ -199,6 +245,12 @@ func main() {
 
 	close(stopMetrics)
 	stopWorkloadMetrics()
+	if jobStore != nil {
+		stopStore()
+		if err := jobStore.Close(); err != nil {
+			log.Printf("⚠️ Failed to close job history store: %v", err)
+		}
+	}
 	if err := server.Shutdown(ctx); err != nil {
 		log.Fatalf("❌ Server forced to shutdown: %v", err)
 	}
@@ -215,6 +267,59 @@ func refreshDashboardSnapshot(exp *explorer.Explorer, queuePrefix string, timeou
 	defer cancel()
 
 	return web.RefreshDashboardCache(ctx, exp, queuePrefix, cache)
+}
+
+// startSweeper launches the retention sweeper goroutine. It runs one sweep
+// shortly after startup, then on the configured interval, until ctx is cancelled.
+func startSweeper(ctx context.Context, s *store.Store, cfg *config.Config) {
+	interval := time.Duration(cfg.StoreSweepSeconds) * time.Second
+	if interval <= 0 {
+		log.Printf("🧹 retention sweeper disabled (STORE_SWEEP_SECONDS<=0)")
+		return
+	}
+	retention := store.Retention{
+		CompletedTTL: time.Duration(cfg.StoreCompletedTTLHours) * time.Hour,
+		FailedTTL:    time.Duration(cfg.StoreFailedTTLHours) * time.Hour,
+		MaxRows:      int64(cfg.StoreMaxRows),
+	}
+	log.Printf("🧹 retention sweeper enabled: interval=%s completedTTL=%s failedTTL=%s maxRows=%d",
+		interval, retention.CompletedTTL, retention.FailedTTL, retention.MaxRows)
+
+	sweep := func() {
+		sctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		deleted, err := s.Sweep(sctx, retention)
+		if err != nil {
+			if ctx.Err() == nil {
+				log.Printf("⚠️ retention sweep error: %v", err)
+			}
+			return
+		}
+		if deleted > 0 {
+			log.Printf("🧹 retention sweep removed %d job(s)", deleted)
+		}
+	}
+
+	go func() {
+		// Small initial delay so startup isn't contended with the first sweep.
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(30 * time.Second):
+		}
+		sweep()
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				sweep()
+			}
+		}
+	}()
 }
 
 func newRedisClient(cfg *config.Config) *redis.Client {

@@ -445,7 +445,15 @@ type pageData struct {
 	Title    string
 	Subtitle string
 	Data     interface{}
+	// ConsoleEnabled mirrors whether the SQLite-backed search console route is
+	// mounted (store enabled). It gates the nav link so disabled deployments
+	// don't advertise a 404.
+	ConsoleEnabled bool
 }
+
+// ConsoleEnabled is set true by main at startup when the job-history store (and
+// therefore the /console route) is active. It controls the layout nav link.
+var ConsoleEnabled bool
 
 const shellTmpl = `
 <!DOCTYPE html>
@@ -465,6 +473,7 @@ const shellTmpl = `
             <div class="flex gap-4 text-sm text-gray-600">
                 <a href="/" class="hover:text-indigo-600">Home</a>
                 <a href="/search" class="font-medium text-indigo-600 hover:text-indigo-800">Search Jobs</a>
+                {{if .ConsoleEnabled}}<a href="/console" class="font-medium text-indigo-600 hover:text-indigo-800">🔎 Console</a>{{end}}
                 <a href="/metrics" target="_blank" class="hover:text-indigo-600">📊 Metrics</a>
                 <a href="/health" target="_blank" class="hover:text-indigo-600">💚 Health</a>
             </div>
@@ -540,9 +549,10 @@ func renderShell(w http.ResponseWriter, title, subtitle, contentTmpl string, dat
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	return tmpl.ExecuteTemplate(w, "shell", pageData{
-		Title:    title,
-		Subtitle: subtitle,
-		Data:     data,
+		Title:          title,
+		Subtitle:       subtitle,
+		Data:           data,
+		ConsoleEnabled: ConsoleEnabled,
 	})
 }
 

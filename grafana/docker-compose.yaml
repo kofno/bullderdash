@@ -25,7 +25,7 @@ services:
       - "host.docker.internal:host-gateway"
 
   grafana:
-    image: grafana/grafana:11.2.0
+    image: grafana/grafana:11.6.11
     container_name: bdd-grafana
     depends_on:
       - prometheus
@@ -34,6 +34,14 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: admin
       GF_USERS_DEFAULT_THEME: dark
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/queue-health.json
+      # Infinity powers the SQLite-backed "Top job names" table, which calls
+      # the bull-der-dash /v1/stats/job-names JSON endpoint instead of the
+      # cardinality-capped Prometheus labels. Infinity 4.x needs the
+      # react/jsx-runtime SystemJS module Grafana exposes from 11.6.11+, which
+      # is why the image above is pinned to that floor.
+      GF_INSTALL_PLUGINS: yesoreyeram-infinity-datasource
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./provisioning:/etc/grafana/provisioning:ro
       - ./dashboards:/var/lib/grafana/dashboards:ro

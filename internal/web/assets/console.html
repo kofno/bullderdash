@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bull-der-dash Console</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --panel-2: #1e222b;
+    --border: #2a2f3a;
+    --text: #e6e9ef;
+    --muted: #9aa4b2;
+    --accent: #6ea8fe;
+    --danger: #f28b82;
+    --ok: #81c995;
+    --warn: #fdd663;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  header h1 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+  }
+  header p {
+    margin: 4px 0 0;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  main { padding: 16px 20px; }
+  form.filters {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px;
+    align-items: end;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+  }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: var(--muted);
+  }
+  .field label.check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    text-transform: none;
+    letter-spacing: normal;
+    font-size: 13px;
+    color: var(--text);
+    padding: 7px 0;
+  }
+  .field label.check input {
+    width: auto;
+    padding: 0;
+    margin: 0;
+    accent-color: var(--accent);
+  }
+  input, select, button {
+    font: inherit;
+    color: var(--text);
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 7px 9px;
+  }
+  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button {
+    cursor: pointer;
+    background: var(--accent);
+    color: #0b1220;
+    border-color: transparent;
+    font-weight: 600;
+  }
+  button.secondary {
+    background: var(--panel-2);
+    color: var(--text);
+    border-color: var(--border);
+    font-weight: 500;
+  }
+  button:hover { filter: brightness(1.08); }
+  .actions { display: flex; gap: 8px; align-items: end; }
+  .statusbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 14px 0 8px;
+    min-height: 22px;
+    flex-wrap: wrap;
+  }
+  .count { color: var(--muted); font-size: 13px; }
+  .notice {
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+  }
+  .notice.info { border-color: #34507a; }
+  .notice.warn { border-color: #6b5a1f; color: var(--warn); }
+  .notice.error { border-color: #6b2f2c; color: var(--danger); }
+  .lineage-banner {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    background: #1b2740;
+    border: 1px solid #34507a;
+    font-size: 13px;
+  }
+  .lineage-banner.on { display: flex; }
+  .table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+    vertical-align: top;
+  }
+  th {
+    position: sticky;
+    top: 0;
+    background: var(--panel);
+    color: var(--muted);
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+  }
+  tbody tr:hover { background: var(--panel-2); }
+  td.err, td.wrap { white-space: normal; max-width: 320px; word-break: break-word; }
+  .state {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 11px;
+    border: 1px solid var(--border);
+  }
+  .state.Completed { color: var(--ok); border-color: #2f5c3a; }
+  .state.Failed { color: var(--danger); border-color: #6b2f2c; }
+  .state.Active { color: var(--accent); border-color: #34507a; }
+  .state.Waiting, .state.Delayed { color: var(--warn); border-color: #6b5a1f; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+  .link {
+    color: var(--accent);
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .muted { color: var(--muted); }
+  .empty { padding: 24px; text-align: center; color: var(--muted); }
+
+  /* Single-job detail overlay (drill-down from a result row's id). */
+  .detail-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(4, 6, 10, 0.62);
+    z-index: 50;
+    padding: 32px 16px;
+    overflow-y: auto;
+  }
+  .detail-backdrop.on { display: flex; align-items: flex-start; justify-content: center; }
+  .detail-panel {
+    width: 100%;
+    max-width: 720px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
+    max-height: calc(100vh - 64px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .detail-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    justify-content: space-between;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel-2);
+  }
+  .detail-head h2 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+    min-width: 0;
+    word-break: break-all;
+  }
+  .detail-head h2 .mono { font-size: 12px; color: var(--muted); }
+  .detail-body { padding: 16px; overflow-y: auto; }
+  .detail-error {
+    padding: 10px 12px;
+    border-radius: 6px;
+    border: 1px solid #6b2f2c;
+    background: #2a1917;
+    color: var(--danger);
+    margin-bottom: 14px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .detail-error.none { border-color: var(--border); background: var(--panel-2); color: var(--muted); }
+  .detail-error .lbl {
+    display: block;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+  .detail-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 10px 18px;
+    margin-bottom: 14px;
+  }
+  .detail-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .detail-field .lbl {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: var(--muted);
+  }
+  .detail-field .val { word-break: break-word; }
+  .detail-field .val.mono { font-size: 12px; }
+  .payload-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 4px 0 6px;
+  }
+  .payload-head .lbl {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: var(--muted);
+  }
+  .payload-note { font-size: 11px; color: var(--muted); }
+  pre.payload {
+    margin: 0 0 14px;
+    padding: 10px 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    max-height: 320px;
+    overflow: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    white-space: pre;
+    color: var(--text);
+  }
+  .detail-loading { padding: 24px; text-align: center; color: var(--muted); }
+  .nav { margin-top: 6px; font-size: 12px; }
+  .nav a { color: var(--accent); text-decoration: none; }
+  .nav a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Bull-der-dash Console</h1>
+  <p>Read-only view over persisted job history (<span class="mono">job_history</span>) via <span class="mono">/v1/search</span>. Same-origin, no external assets.</p>
+  <p class="nav"><a href="/">&larr; Dashboard</a></p>
+</header>
+<main>
+  <form class="filters" id="filters">
+    <div class="field">
+      <label for="q">Search (q)</label>
+      <input id="q" name="q" type="text" placeholder="id / name / trace / error / payload" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="name">Name</label>
+      <input id="name" name="name" type="text" placeholder="exact job name" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="state">State</label>
+      <select id="state" name="state">
+        <option value="">any (Completed / Failed)</option>
+        <option value="Completed">Completed</option>
+        <option value="Failed">Failed</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="trace_id">Trace ID</label>
+      <input id="trace_id" name="trace_id" type="text" placeholder="exact trace id" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="errored">Errored</label>
+      <label class="check"><input id="errored" name="errored" type="checkbox"> retried or has error</label>
+    </div>
+    <div class="field">
+      <label for="window">Finished within</label>
+      <select id="window" name="window">
+        <option value="300000">5m</option>
+        <option value="900000">15m</option>
+        <option value="3600000">1h</option>
+        <option value="21600000">6h</option>
+        <option value="86400000">24h</option>
+        <option value="all" selected>all</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="limit">Limit</label>
+      <input id="limit" name="limit" type="number" min="1" max="1000" value="100">
+    </div>
+    <div class="actions">
+      <button type="submit">Search</button>
+      <button type="button" class="secondary" id="reset">Reset</button>
+    </div>
+  </form>
+
+  <div class="lineage-banner" id="lineageBanner">
+    <span>Lineage view for trace <span class="mono" id="lineageTrace"></span> &middot; ordered by execution depth</span>
+    <button type="button" class="secondary" id="clearLineage">Clear lineage / back to search</button>
+  </div>
+
+  <div class="statusbar">
+    <span class="count" id="count"></span>
+    <span id="notice"></span>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>State</th>
+          <th>Queue</th>
+          <th>Attempts</th>
+          <th>Depth</th>
+          <th>Created</th>
+          <th>Finished</th>
+          <th>Last error</th>
+          <th>Trace ID</th>
+          <th>ID</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="empty" id="empty" hidden></div>
+  </div>
+</main>
+
+<div class="detail-backdrop" id="detailBackdrop" role="dialog" aria-modal="true" aria-labelledby="detailTitle">
+  <div class="detail-panel">
+    <div class="detail-head">
+      <h2 id="detailTitle">Job detail <span class="mono" id="detailId"></span></h2>
+      <button type="button" class="secondary" id="detailClose">Close</button>
+    </div>
+    <div class="detail-body" id="detailBody"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var els = {
+    form: document.getElementById("filters"),
+    q: document.getElementById("q"),
+    name: document.getElementById("name"),
+    state: document.getElementById("state"),
+    trace: document.getElementById("trace_id"),
+    errored: document.getElementById("errored"),
+    window: document.getElementById("window"),
+    limit: document.getElementById("limit"),
+    reset: document.getElementById("reset"),
+    rows: document.getElementById("rows"),
+    empty: document.getElementById("empty"),
+    count: document.getElementById("count"),
+    notice: document.getElementById("notice"),
+    lineageBanner: document.getElementById("lineageBanner"),
+    lineageTrace: document.getElementById("lineageTrace"),
+    clearLineage: document.getElementById("clearLineage"),
+    detailBackdrop: document.getElementById("detailBackdrop"),
+    detailId: document.getElementById("detailId"),
+    detailBody: document.getElementById("detailBody"),
+    detailClose: document.getElementById("detailClose")
+  };
+
+  var lineageMode = false;
+
+  function pad(n) { return n < 10 ? "0" + n : "" + n; }
+
+  // Humanize a millisecond epoch into a compact local timestamp. Non-finite or
+  // non-positive values (missing timestamps) render as an em dash.
+  function humanize(ms) {
+    if (typeof ms !== "number" || !isFinite(ms) || ms <= 0) { return "\u2014"; }
+    var d = new Date(ms);
+    if (isNaN(d.getTime())) { return "\u2014"; }
+    return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) +
+      " " + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+  }
+
+  function setNotice(kind, text) {
+    els.notice.textContent = "";
+    if (!text) { return; }
+    var span = document.createElement("span");
+    span.className = "notice " + kind;
+    span.textContent = text;
+    els.notice.appendChild(span);
+  }
+
+  function clearRows() {
+    while (els.rows.firstChild) { els.rows.removeChild(els.rows.firstChild); }
+  }
+
+  function showEmpty(text) {
+    els.empty.hidden = false;
+    els.empty.textContent = text;
+  }
+
+  function hideEmpty() {
+    els.empty.hidden = true;
+    els.empty.textContent = "";
+  }
+
+  // Build the query string from the current filter inputs. Only non-empty values are
+  // included. The relative-time picker is converted to since_ms client-side ('all' omits it).
+  function buildQuery() {
+    var params = new URLSearchParams();
+    var q = els.q.value.trim();
+    var name = els.name.value.trim();
+    var state = els.state.value;
+    var trace = els.trace.value.trim();
+    var win = els.window.value;
+    var limit = parseInt(els.limit.value, 10);
+
+    if (q) { params.set("q", q); }
+    if (name) { params.set("name", name); }
+    if (state) { params.set("state", state); }
+    if (trace) { params.set("trace_id", trace); }
+    if (els.errored.checked) { params.set("errored", "true"); }
+    if (win && win !== "all") {
+      var n = parseInt(win, 10);
+      if (isFinite(n) && n > 0) { params.set("since_ms", String(Date.now() - n)); }
+    }
+    if (isFinite(limit) && limit > 0) {
+      params.set("limit", String(Math.min(limit, 1000)));
+    }
+    return params;
+  }
+
+  // At least one real predicate (not just a time window) must be present, matching
+  // the server contract which 400s a since_ms-only query.
+  function hasPredicate(params) {
+    return params.has("q") || params.has("name") || params.has("state") ||
+      params.has("trace_id") || params.has("errored") || params.has("since_ms");
+  }
+
+  // Create a clickable trace-id cell that drills into the lineage for that trace.
+  function traceCell(trace) {
+    var td = document.createElement("td");
+    td.className = "mono";
+    if (trace) {
+      var link = document.createElement("span");
+      link.className = "link";
+      link.textContent = trace;
+      link.title = "Show lineage for this trace";
+      link.addEventListener("click", function () { enterLineage(trace); });
+      td.appendChild(link);
+    } else {
+      var dash = document.createElement("span");
+      dash.className = "muted";
+      dash.textContent = "\u2014";
+      td.appendChild(dash);
+    }
+    return td;
+  }
+
+  // Create a clickable id cell that opens the full single-job detail drill-down.
+  function idCell(id) {
+    var td = document.createElement("td");
+    td.className = "mono";
+    if (id === null || id === undefined || id === "") {
+      var dash = document.createElement("span");
+      dash.className = "muted";
+      dash.textContent = "\u2014";
+      td.appendChild(dash);
+      return td;
+    }
+    var link = document.createElement("span");
+    link.className = "link";
+    link.textContent = String(id);
+    link.title = "Show job detail";
+    link.addEventListener("click", function () { openDetail(id); });
+    td.appendChild(link);
+    return td;
+  }
+
+  function textCell(value, className) {
+    var td = document.createElement("td");
+    if (className) { td.className = className; }
+    if (value === null || value === undefined || value === "") {
+      var dash = document.createElement("span");
+      dash.className = "muted";
+      dash.textContent = "\u2014";
+      td.appendChild(dash);
+    } else {
+      td.textContent = String(value);
+    }
+    return td;
+  }
+
+  function stateCell(state) {
+    var td = document.createElement("td");
+    var badge = document.createElement("span");
+    var safe = typeof state === "string" ? state : "";
+    badge.className = "state " + safe.replace(/[^A-Za-z]/g, "");
+    badge.textContent = safe || "\u2014";
+    td.appendChild(badge);
+    return td;
+  }
+
+  // Render an array of SearchRow objects into the table. All dynamic values are inserted
+  // via textContent / createElement only; nothing is ever placed via innerHTML.
+  function renderRows(list) {
+    clearRows();
+    if (!list.length) {
+      showEmpty("No matching runs.");
+      els.count.textContent = "0 results";
+      return;
+    }
+    hideEmpty();
+    els.count.textContent = list.length + (list.length === 1 ? " result" : " results");
+
+    for (var i = 0; i < list.length; i++) {
+      var row = list[i];
+      var tr = document.createElement("tr");
+      tr.appendChild(textCell(row.name, "wrap"));
+      tr.appendChild(stateCell(row.state));
+      tr.appendChild(textCell(row.queue, "mono"));
+      tr.appendChild(textCell(row.attempts));
+      tr.appendChild(textCell(row.execution_depth));
+      tr.appendChild(textCell(humanize(row.created_at)));
+      tr.appendChild(textCell(humanize(row.finished_at)));
+      tr.appendChild(textCell(row.last_error, "err"));
+      tr.appendChild(traceCell(row.trace_id));
+      tr.appendChild(idCell(row.id));
+      els.rows.appendChild(tr);
+    }
+  }
+
+  function runSearch(params) {
+    if (!hasPredicate(params)) {
+      clearRows();
+      hideEmpty();
+      els.count.textContent = "";
+      setNotice("info", "Add at least one filter (search text, name, state, trace, errored, or a finished-within window) to run a query.");
+      return;
+    }
+    setNotice("");
+    els.count.textContent = "";
+    clearRows();
+    showEmpty("Loading\u2026");
+
+    fetch("/v1/search?" + params.toString(), { headers: { "Accept": "application/json" } })
+      .then(function (res) {
+        if (res.status === 200) {
+          return res.json().then(function (data) { handleSuccess(data); });
+        }
+        if (res.status === 400) {
+          clearRows();
+          hideEmpty();
+          els.count.textContent = "";
+          setNotice("info", "Add at least one filter to run a query.");
+          return;
+        }
+        if (res.status === 503) {
+          clearRows();
+          hideEmpty();
+          els.count.textContent = "";
+          setNotice("warn", "Reader busy, try again in a moment.");
+          return;
+        }
+        clearRows();
+        hideEmpty();
+        els.count.textContent = "";
+        setNotice("error", "Search failed (HTTP " + res.status + "). Try again.");
+      })
+      .catch(function () {
+        clearRows();
+        hideEmpty();
+        els.count.textContent = "";
+        setNotice("error", "Network error contacting the server. Try again.");
+      });
+  }
+
+  function handleSuccess(data) {
+    var list = Array.isArray(data) ? data : [];
+    if (lineageMode) {
+      // Re-sort the fan-out chain top-down by execution depth for readability.
+      list = list.slice().sort(function (a, b) {
+        return (a.execution_depth || 0) - (b.execution_depth || 0);
+      });
+    }
+    renderRows(list);
+  }
+
+  // Enter lineage drill-down: pin the trace_id filter, clear free-text, re-run.
+  function enterLineage(trace) {
+    lineageMode = true;
+    els.trace.value = trace;
+    els.q.value = "";
+    els.window.value = "all";
+    els.lineageTrace.textContent = trace;
+    els.lineageBanner.classList.add("on");
+    var params = new URLSearchParams();
+    params.set("trace_id", trace);
+    var limit = parseInt(els.limit.value, 10);
+    params.set("limit", String(isFinite(limit) && limit > 0 ? Math.min(limit, 1000) : 100));
+    runSearch(params);
+  }
+
+  function exitLineage() {
+    lineageMode = false;
+    els.lineageBanner.classList.remove("on");
+    els.lineageTrace.textContent = "";
+    els.trace.value = "";
+    runSearch(buildQuery());
+  }
+
+  // ---- Single-job detail drill-down (GET /v1/jobs/{id}) ----
+
+  var detailOpen = false;
+  var currentDetailId = null;
+
+  function clearNode(node) {
+    while (node.firstChild) { node.removeChild(node.firstChild); }
+  }
+
+  // Reflect the open job in the URL hash so a refresh or shared link reopens it. We use
+  // replaceState (no hashchange event) so this self-update never re-triggers openDetail.
+  function setHash(id) {
+    var target = "#job/" + encodeURIComponent(id);
+    if (location.hash !== target) {
+      history.replaceState(null, "", location.pathname + location.search + target);
+    }
+  }
+
+  function clearHash() {
+    if ((location.hash || "").indexOf("#job/") === 0) {
+      history.replaceState(null, "", location.pathname + location.search);
+    }
+  }
+
+  function jobFromHash() {
+    var h = location.hash || "";
+    if (h.indexOf("#job/") !== 0) { return null; }
+    var raw = h.slice(5);
+    if (!raw) { return null; }
+    try { return decodeURIComponent(raw); } catch (e) { return raw; }
+  }
+
+  function showLoadingDetail() {
+    clearNode(els.detailBody);
+    var d = document.createElement("div");
+    d.className = "detail-loading";
+    d.textContent = "Loading\u2026";
+    els.detailBody.appendChild(d);
+  }
+
+  function showDetailMessage(kind, text) {
+    clearNode(els.detailBody);
+    var span = document.createElement("span");
+    span.className = "notice " + kind;
+    span.textContent = text;
+    els.detailBody.appendChild(span);
+  }
+
+  // A single labelled value; null/blank values render as a muted em dash (never "null").
+  function detailField(grid, label, value, mono) {
+    var field = document.createElement("div");
+    field.className = "detail-field";
+    var lbl = document.createElement("span");
+    lbl.className = "lbl";
+    lbl.textContent = label;
+    field.appendChild(lbl);
+    var val = document.createElement("span");
+    if (value === null || value === undefined || value === "") {
+      val.className = "val muted";
+      val.textContent = "\u2014";
+    } else {
+      val.className = mono ? "val mono" : "val";
+      val.textContent = String(value);
+    }
+    field.appendChild(val);
+    grid.appendChild(field);
+  }
+
+  // Epoch-millis field humanized like the table; missing values fall through to the em dash.
+  function detailTimeField(grid, label, raw) {
+    var ok = typeof raw === "number" && isFinite(raw) && raw > 0;
+    detailField(grid, label, ok ? humanize(raw) : null, false);
+  }
+
+  // Pretty-print a JSON string field (data/opts). Blank renders as em dash; invalid
+  // JSON falls back to the raw text so nothing is ever hidden from the operator.
+  function prettyJSON(raw) {
+    if (raw === null || raw === undefined || raw === "") { return "\u2014"; }
+    try { return JSON.stringify(JSON.parse(raw), null, 2); } catch (e) { return String(raw); }
+  }
+
+  function payloadBlock(body, label, raw) {
+    var head = document.createElement("div");
+    head.className = "payload-head";
+    var lbl = document.createElement("span");
+    lbl.className = "lbl";
+    lbl.textContent = label;
+    head.appendChild(lbl);
+    body.appendChild(head);
+
+    var pre = document.createElement("pre");
+    pre.className = "payload";
+    pre.textContent = prettyJSON(raw);
+    body.appendChild(pre);
+  }
+
+  function renderDetail(d) {
+    var body = els.detailBody;
+    clearNode(body);
+
+    // Prominent, full-width last_error near the top: the primary failure-triage signal.
+    var err = document.createElement("div");
+    if (d.last_error === null || d.last_error === undefined || d.last_error === "") {
+      err.className = "detail-error none";
+      err.textContent = "No error recorded.";
+    } else {
+      err.className = "detail-error";
+      var elbl = document.createElement("span");
+      elbl.className = "lbl";
+      elbl.textContent = "Last error";
+      err.appendChild(elbl);
+      var etext = document.createElement("span");
+      etext.textContent = String(d.last_error);
+      err.appendChild(etext);
+    }
+    body.appendChild(err);
+
+    var grid = document.createElement("div");
+    grid.className = "detail-grid";
+    detailField(grid, "Name", d.name, false);
+    detailField(grid, "State", d.state, false);
+    detailField(grid, "Queue", d.queue, true);
+    detailField(grid, "Attempts", d.attempts, false);
+    detailField(grid, "Execution depth", d.execution_depth, false);
+    detailTimeField(grid, "Created", d.created_at);
+    detailTimeField(grid, "Finished", d.finished_at);
+    detailField(grid, "Trace ID", d.trace_id, true);
+    detailField(grid, "ID", d.id, true);
+    body.appendChild(grid);
+
+    payloadBlock(body, "Payload (data)", d.data);
+    payloadBlock(body, "Options (opts)", d.opts);
+  }
+
+  // Fetch and render one job's full record. Guards against blank/missing ids and against a
+  // late response arriving after the panel was closed or navigated to another job.
+  function openDetail(id) {
+    if (id === null || id === undefined || String(id) === "") { return; }
+    id = String(id);
+    currentDetailId = id;
+    detailOpen = true;
+    els.detailId.textContent = id;
+    els.detailBackdrop.classList.add("on");
+    setHash(id);
+    showLoadingDetail();
+
+    fetch("/v1/jobs/" + encodeURIComponent(id), { headers: { "Accept": "application/json" } })
+      .then(function (res) {
+        if (!detailOpen || currentDetailId !== id) { return; }
+        if (res.status === 200) {
+          return res.json().then(function (data) {
+            if (detailOpen && currentDetailId === id) { renderDetail(data); }
+          });
+        }
+        if (res.status === 400) { showDetailMessage("error", "Invalid job id."); return; }
+        if (res.status === 404) {
+          showDetailMessage("info", "No job found for this id. It may have aged out of retention.");
+          return;
+        }
+        if (res.status === 503) {
+          showDetailMessage("warn", "Reader busy, try again in a moment.");
+          return;
+        }
+        showDetailMessage("error", "Failed to load job detail (HTTP " + res.status + ").");
+      })
+      .catch(function () {
+        if (detailOpen && currentDetailId === id) {
+          showDetailMessage("error", "Network error contacting the server. Try again.");
+        }
+      });
+  }
+
+  function closeDetail() {
+    if (!detailOpen) { return; }
+    detailOpen = false;
+    currentDetailId = null;
+    els.detailBackdrop.classList.remove("on");
+    els.detailId.textContent = "";
+    clearNode(els.detailBody);
+    clearHash();
+  }
+
+  function onHashChange() {
+    var id = jobFromHash();
+    if (id) {
+      if (!detailOpen || currentDetailId !== id) { openDetail(id); }
+    } else if (detailOpen) {
+      closeDetail();
+    }
+  }
+
+  els.detailClose.addEventListener("click", closeDetail);
+  els.detailBackdrop.addEventListener("click", function (e) {
+    if (e.target === els.detailBackdrop) { closeDetail(); }
+  });
+  document.addEventListener("keydown", function (e) {
+    if (detailOpen && (e.key === "Escape" || e.keyCode === 27)) { closeDetail(); }
+  });
+  window.addEventListener("hashchange", onHashChange);
+
+  els.form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    lineageMode = false;
+    els.lineageBanner.classList.remove("on");
+    runSearch(buildQuery());
+  });
+
+  els.reset.addEventListener("click", function () {
+    lineageMode = false;
+    els.lineageBanner.classList.remove("on");
+    els.q.value = "";
+    els.name.value = "";
+    els.state.value = "";
+    els.trace.value = "";
+    els.errored.checked = false;
+    els.window.value = "all";
+    els.limit.value = "100";
+    clearRows();
+    hideEmpty();
+    els.count.textContent = "";
+    setNotice("info", "Add at least one filter to run a query.");
+  });
+
+  els.clearLineage.addEventListener("click", exitLineage);
+
+  // Initial state: guide the operator to add a filter.
+  setNotice("info", "Add at least one filter (search text, name, state, trace, errored, or a finished-within window) to run a query.");
+
+  // Reopen a deep-linked job detail (#job/<id>) on load.
+  onHashChange();
+})();
+</script>
+</body>
+</html>
