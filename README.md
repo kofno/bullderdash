@@ -12,6 +12,9 @@ A high-performance dashboard for monitoring BullMQ queues, built in Go for speed
 - **Persistent Job History**: Completed/failed jobs are recorded to an embedded
   SQLite database (WAL mode, pure-Go `modernc.org/sqlite`, no CGO) off the hot
   path, so the live Redis/Valkey instance is never scanned to answer queries
+- **Unified Dark UI**: The live dashboard and the search console now share one
+  dependency-free "Anvil" dark design system (`internal/web/assets/app.css` +
+  `app.js`), served same-origin via `go:embed` — no CDN, htmx, or Tailwind
 - **Full-Text Search Console**: `/console` search UI backed by SQLite FTS5 over
   job name, trace id, last error, and payloads — with trace-lineage drill-down
   and single-job detail, served as a dependency-free same-origin page
@@ -47,10 +50,12 @@ bull-der-dash/
 │   └── web/               # HTTP handlers, templates & embedded search console
 ```
 
-> The live dashboard is HTMX-driven, but the search console (`/console`) is a
-> dependency-free, framework-free page (vanilla JS, embedded via `go:embed`) that
-> talks only to the same-origin `/v1/search` and `/v1/jobs/{id}` JSON endpoints.
-> New UI work targets the console; HTMX is being phased out.
+> The whole UI is framework-free. Live pages (dashboard, queue detail) poll
+> same-origin HTML fragment endpoints via a small vanilla-JS helper
+> (`internal/web/assets/app.js`, `data-poll-url`), and the search console
+> (`/console`) talks to the same-origin `/v1/search` and `/v1/jobs/{id}` JSON
+> endpoints. All pages share one dark design system (`app.css`) embedded via
+> `go:embed` — no CDN, htmx, or Tailwind.
 
 ## Quick Start 🚀
 
@@ -175,11 +180,13 @@ Sentinel behavior:
 
 ### Web UI
 - `GET /` - Main dashboard
-- `GET /queues` - HTMX partial: queue list
+- `GET /queues` - Polled HTML fragment: queue list
 - `GET /queue/<name>` - Single-queue detail view
 - `GET /queue/jobs?queue=<name>&state=<state>` - Job list for a queue/state
 - `GET /job/detail?queue=<name>&id=<id>` - Job detail (JSON)
 - `GET /console` - Full-text search console (only when `STORE_ENABLED=true`)
+- `GET /search` - Deprecated; redirects to `/console` (or `/` when the store is disabled)
+- `GET /assets/<file>` - Embedded shared CSS/JS design system (immutable, cache-busted)
 
 ### Search API (JSON)
 Available when `STORE_ENABLED=true`; backs the `/console` UI and is safe to call directly.
