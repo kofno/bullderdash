@@ -16,102 +16,57 @@ import (
 
 // The template for our queue list
 const queueListTmpl = `
-<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+<div class="grid cols-auto">
     {{range .}}
-    <div class="rounded-xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-shadow">
-        <div class="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
-            <a href="/queue/{{.Name}}" class="text-lg font-semibold text-indigo-700 hover:text-indigo-900">{{.Name}}</a>
-            <span class="text-xs uppercase tracking-wide text-gray-400">Total</span>
-            <span class="text-sm font-bold text-gray-900">{{.Total}}</span>
+    <div class="card">
+        <div class="qcard-head">
+            <a href="/queue/{{.Name}}" class="qname">{{.Name}}</a>
+            <span class="qtotal">Total<strong>{{.Total}}</strong></span>
         </div>
-        <div class="px-4 py-3 grid grid-cols-2 gap-2 text-sm">
-            <div class="flex items-center justify-between rounded-md bg-yellow-50 px-2 py-1">
-                <span class="text-yellow-800">Waiting</span>
-                {{if gt .Wait 0}}
-                    <a href="/queue/jobs?queue={{.Name}}&state=waiting" class="font-semibold text-yellow-900 hover:text-yellow-700">{{.Wait}}</a>
-                {{else}}
-                    <span class="text-gray-400">{{.Wait}}</span>
-                {{end}}
+        <div class="qgrid">
+            <div class="qcell g-warn">
+                <span class="k">Waiting</span>
+                {{if gt .Wait 0}}<a class="v" href="/queue/jobs?queue={{.Name}}&state=waiting">{{.Wait}}</a>{{else}}<span class="v zero">0</span>{{end}}
             </div>
-            <div class="flex items-center justify-between rounded-md bg-blue-50 px-2 py-1">
-                <span class="text-blue-800">Active</span>
-                {{if gt .Active 0}}
-                    <a href="/queue/jobs?queue={{.Name}}&state=active" class="font-semibold text-blue-900 hover:text-blue-700">{{.Active}}</a>
-                {{else}}
-                    <span class="text-gray-400">{{.Active}}</span>
-                {{end}}
+            <div class="qcell g-flow">
+                <span class="k">Active</span>
+                {{if gt .Active 0}}<a class="v" href="/queue/jobs?queue={{.Name}}&state=active">{{.Active}}</a>{{else}}<span class="v zero">0</span>{{end}}
             </div>
-            <div class="flex items-center justify-between rounded-md bg-slate-50 px-2 py-1">
-                <span class="text-slate-700">Paused</span>
-                {{if gt .Paused 0}}
-                    <a href="/queue/jobs?queue={{.Name}}&state=paused" class="font-semibold text-slate-800 hover:text-slate-600">{{.Paused}}</a>
-                {{else}}
-                    <span class="text-gray-400">{{.Paused}}</span>
-                {{end}}
+            <div class="qcell g-muted">
+                <span class="k">Paused</span>
+                {{if gt .Paused 0}}<a class="v" href="/queue/jobs?queue={{.Name}}&state=paused">{{.Paused}}</a>{{else}}<span class="v zero">0</span>{{end}}
             </div>
-            <div class="flex items-center justify-between rounded-md bg-fuchsia-50 px-2 py-1">
-                <span class="text-fuchsia-800">Prioritized</span>
-                {{if gt .Prioritized 0}}
-                    <a href="/queue/jobs?queue={{.Name}}&state=prioritized" class="font-semibold text-fuchsia-900 hover:text-fuchsia-700">{{.Prioritized}}</a>
-                {{else}}
-                    <span class="text-gray-400">{{.Prioritized}}</span>
-                {{end}}
+            <div class="qcell g-flow">
+                <span class="k">Prioritized</span>
+                {{if gt .Prioritized 0}}<a class="v" href="/queue/jobs?queue={{.Name}}&state=prioritized">{{.Prioritized}}</a>{{else}}<span class="v zero">0</span>{{end}}
             </div>
-            <div class="flex items-center justify-between rounded-md bg-amber-50 px-2 py-1">
-                <span class="text-amber-800">Waiting-Children</span>
-                {{if gt .WaitingChildren 0}}
-                    <a href="/queue/jobs?queue={{.Name}}&state=waiting-children" class="font-semibold text-amber-900 hover:text-amber-700">{{.WaitingChildren}}</a>
-                {{else}}
-                    <span class="text-gray-400">{{.WaitingChildren}}</span>
-                {{end}}
+            <div class="qcell g-warn">
+                <span class="k">Waiting-Children</span>
+                {{if gt .WaitingChildren 0}}<a class="v" href="/queue/jobs?queue={{.Name}}&state=waiting-children">{{.WaitingChildren}}</a>{{else}}<span class="v zero">0</span>{{end}}
             </div>
-            <div class="flex items-center justify-between rounded-md bg-green-50 px-2 py-1">
-                <span class="text-green-800">Completed</span>
-                {{if gt .Completed 0}}
-                    <a href="/queue/jobs?queue={{.Name}}&state=completed" class="font-semibold text-green-900 hover:text-green-700">{{.Completed}}</a>
-                {{else}}
-                    <span class="text-gray-400">{{.Completed}}</span>
-                {{end}}
+            <div class="qcell g-ok">
+                <span class="k">Completed</span>
+                {{if gt .Completed 0}}<a class="v" href="/queue/jobs?queue={{.Name}}&state=completed">{{.Completed}}</a>{{else}}<span class="v zero">0</span>{{end}}
             </div>
-            <div class="flex items-center justify-between rounded-md bg-red-50 px-2 py-1">
-                <span class="text-red-800">Failed</span>
-                {{if gt .Failed 0}}
-                    <a href="/queue/jobs?queue={{.Name}}&state=failed" class="font-semibold text-red-900 hover:text-red-700">{{.Failed}}</a>
-                {{else}}
-                    <span class="text-gray-400">{{.Failed}}</span>
-                {{end}}
+            <div class="qcell g-danger">
+                <span class="k">Failed</span>
+                {{if gt .Failed 0}}<a class="v" href="/queue/jobs?queue={{.Name}}&state=failed">{{.Failed}}</a>{{else}}<span class="v zero">0</span>{{end}}
             </div>
-            <div class="flex items-center justify-between rounded-md bg-purple-50 px-2 py-1">
-                <span class="text-purple-800">Delayed</span>
-                {{if gt .Delayed 0}}
-                    <a href="/queue/jobs?queue={{.Name}}&state=delayed" class="font-semibold text-purple-900 hover:text-purple-700">{{.Delayed}}</a>
-                {{else}}
-                    <span class="text-gray-400">{{.Delayed}}</span>
-                {{end}}
+            <div class="qcell g-warn">
+                <span class="k">Delayed</span>
+                {{if gt .Delayed 0}}<a class="v" href="/queue/jobs?queue={{.Name}}&state=delayed">{{.Delayed}}</a>{{else}}<span class="v zero">0</span>{{end}}
             </div>
-            <div class="flex items-center justify-between rounded-md bg-orange-50 px-2 py-1">
-                <span class="text-orange-800">Stalled</span>
-                {{if gt .Stalled 0}}
-                    <span class="font-semibold text-orange-900">{{.Stalled}}</span>
-                {{else}}
-                    <span class="text-gray-400">{{.Stalled}}</span>
-                {{end}}
+            <div class="qcell g-danger">
+                <span class="k">Stalled</span>
+                {{if gt .Stalled 0}}<span class="v">{{.Stalled}}</span>{{else}}<span class="v zero">0</span>{{end}}
             </div>
-            <div class="flex items-center justify-between rounded-md bg-gray-100 px-2 py-1">
-                <span class="text-gray-700">Orphaned</span>
-                {{if .OrphanedKnown}}
-                    {{if gt .Orphaned 0}}
-                        <span class="font-semibold text-gray-900">{{.Orphaned}}</span>
-                    {{else}}
-                        <span class="text-gray-400">{{.Orphaned}}</span>
-                    {{end}}
-                {{else}}
-                    <span class="text-gray-400" title="Orphaned is available in diagnostic views">diag</span>
-                {{end}}
+            <div class="qcell g-muted">
+                <span class="k">Orphaned</span>
+                {{if .OrphanedKnown}}{{if gt .Orphaned 0}}<span class="v">{{.Orphaned}}</span>{{else}}<span class="v zero">0</span>{{end}}{{else}}<span class="v zero" title="Orphaned is available in diagnostic views">diag</span>{{end}}
             </div>
         </div>
-        <div class="px-4 py-3 border-t border-gray-100 text-right">
-            <a href="/queue/{{.Name}}" class="text-sm font-medium text-indigo-600 hover:text-indigo-900">View →</a>
+        <div class="qcard-foot">
+            <a class="link" href="/queue/{{.Name}}">View →</a>
         </div>
     </div>
     {{end}}
@@ -292,87 +247,66 @@ func ReadyHandler(exp *explorer.Explorer) http.HandlerFunc {
 
 const jobListTmpl = `
 <div class="space-y-6">
-    <div class="flex flex-wrap items-center justify-between gap-4">
-        <div>
-            <div class="text-sm uppercase tracking-wide text-gray-400">Queue</div>
-            <div class="text-xl font-semibold text-indigo-700">{{.Data.Queue}}</div>
-        </div>
-        <div class="flex items-center gap-3">
-            <span class="text-xs uppercase tracking-wide text-gray-400">State</span>
-            <span class="px-2 py-1 rounded-full text-xs bg-gray-100 text-gray-700">{{.Data.State}}</span>
-            <span class="text-sm text-gray-500">({{len .Data.Jobs}})</span>
-        </div>
-        <div class="flex items-center gap-4 text-sm">
-            <a href="/queue/{{.Data.Queue}}" class="font-medium text-indigo-600 hover:text-indigo-800">← Back to Queue</a>
-            <a href="/" class="font-medium text-gray-500 hover:text-gray-700">All Queues</a>
-            {{if ne .Data.State "all"}}
-            <a href="/queue/jobs?queue={{.Data.Queue}}&state=all" class="font-medium text-gray-500 hover:text-gray-700">All States View</a>
-            {{end}}
+    <div class="page-head">
+        <div class="row" style="justify-content:space-between;">
+            <div>
+                <h1>{{.Data.Queue}}</h1>
+                <p><span class="state {{.Data.State}}">{{.Data.State}}</span> · {{len .Data.Jobs}} job(s) on this page</p>
+            </div>
+            <div class="row">
+                <a class="btn secondary" href="/queue/{{.Data.Queue}}">← Back to Queue</a>
+                <a class="btn secondary" href="/">All Queues</a>
+                {{if ne .Data.State "all"}}
+                <a class="btn secondary" href="/queue/jobs?queue={{.Data.Queue}}&state=all">All States</a>
+                {{end}}
+            </div>
         </div>
     </div>
 
     {{if .Data.WindowLabel}}
-    <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">
+    <div class="notice info row" style="justify-content:space-between;">
         <span>{{.Data.WindowLabel}}</span>
-        <span>{{.Data.SearchedJobs}} jobs loaded for this page</span>
+        <span class="muted">{{.Data.SearchedJobs}} jobs loaded for this page</span>
     </div>
     {{end}}
 
     {{if .Data.Jobs}}
-    <div class="overflow-x-auto rounded-lg border border-gray-200">
-        <table class="min-w-full divide-y divide-gray-200">
-            <thead class="bg-gray-50">
+    <div class="table-wrap">
+        <table>
+            <thead>
                 <tr>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Job ID</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Created</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Attempts</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+                    <th>Job ID</th>
+                    <th>Name</th>
+                    <th>Created</th>
+                    <th>Attempts</th>
+                    <th>Actions</th>
                 </tr>
             </thead>
-            <tbody class="bg-white divide-y divide-gray-200">
+            <tbody>
                 {{range .Data.Jobs}}
-                <tr class="hover:bg-gray-50">
-                    <td class="px-6 py-4 text-sm font-mono text-gray-600">{{.ID}}</td>
-                    <td class="px-6 py-4 text-sm text-gray-900">{{.Name}}</td>
-                    <td class="px-6 py-4 text-sm text-gray-500">{{.Timestamp.Format "2006-01-02 15:04:05"}}</td>
-                    <td class="px-6 py-4 text-sm text-gray-500">{{.AttemptsMade}}</td>
-                    <td class="px-6 py-4 text-sm">
-                        <a href="/job/detail?queue={{.Queue}}&id={{.ID}}" 
-                           class="text-indigo-600 hover:text-indigo-900"
-                           target="_blank">
-                            View Details →
-                        </a>
-                    </td>
+                <tr>
+                    <td class="mono">{{.ID}}</td>
+                    <td>{{.Name}}</td>
+                    <td class="muted">{{.Timestamp.Format "2006-01-02 15:04:05"}}</td>
+                    <td>{{.AttemptsMade}}</td>
+                    <td><a class="link" href="/job/detail?queue={{.Queue}}&id={{.ID}}" target="_blank" rel="noopener">View Details →</a></td>
                 </tr>
                 {{end}}
             </tbody>
         </table>
     </div>
     {{else}}
-    <div class="text-center py-12 text-gray-500 border border-dashed border-gray-200 rounded-lg">
-        No jobs in {{.Data.State}} state
-    </div>
+    <div class="empty">No jobs in {{.Data.State}} state</div>
     {{end}}
 
-    <div class="flex flex-wrap items-center justify-between gap-3 text-sm">
-        <div class="text-gray-500">Page {{.Data.Page}}</div>
-        <div class="flex items-center gap-3">
+    <div class="row" style="justify-content:space-between;">
+        <div class="muted">Page {{.Data.Page}}</div>
+        <div class="row">
             {{if .Data.HasPrevPage}}
-            <a
-                href="/queue/jobs?queue={{.Data.Queue}}&state={{.Data.State}}&page={{sub .Data.Page 1}}"
-                class="rounded-md border border-gray-300 px-3 py-2 font-medium text-gray-600 hover:text-gray-900"
-            >
-                Previous
-            </a>
+            <a class="btn secondary" href="/queue/jobs?queue={{.Data.Queue}}&state={{.Data.State}}&page={{sub .Data.Page 1}}">Previous</a>
             {{end}}
             {{if .Data.HasNextPage}}
-            <a
-                href="/queue/jobs?queue={{.Data.Queue}}&state={{.Data.State}}&page={{add .Data.Page 1}}"
-                class="rounded-md border border-gray-300 px-3 py-2 font-medium text-gray-600 hover:text-gray-900"
-            >
-                Next
-            </a>
+            <a class="btn secondary" href="/queue/jobs?queue={{.Data.Queue}}&state={{.Data.State}}&page={{add .Data.Page 1}}">Next</a>
             {{end}}
         </div>
     </div>
@@ -613,341 +547,196 @@ func renderQueueSummaryHTML(stat explorer.QueueStats) (template.HTML, error) {
 }
 
 const queueSummaryTmpl = `
-<div id="queue-summary" hx-get="/queue/summary?queue={{.Data.Stat.Name}}" hx-trigger="every 5s" hx-swap="outerHTML">
-<div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-8">
-    <div class="rounded-lg border border-gray-200 p-4">
-        <div class="text-xs uppercase text-gray-400">Queue</div>
-        <div class="text-lg font-semibold text-indigo-700">{{.Data.Stat.Name}}</div>
-        <div class="mt-2 text-sm text-gray-600">Total jobs</div>
-        <div class="text-2xl font-bold text-gray-900">{{.Data.Stat.Total}}</div>
-        <div class="mt-4">
-            <a href="/queue/jobs?queue={{.Data.Stat.Name}}&state=all" class="inline-flex items-center rounded-md bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700">
-                Search Jobs →
-            </a>
+<div class="grid cols-auto" style="margin-bottom:20px;">
+    <div class="card">
+        <div class="stat">
+            <span class="label">Queue</span>
+            <span class="value" style="font-size:18px;">{{.Data.Stat.Name}}</span>
+        </div>
+        <div class="stat" style="margin-top:10px;">
+            <span class="label">Total jobs</span>
+            <span class="value">{{.Data.Stat.Total}}</span>
+        </div>
+        <div style="margin-top:12px;">
+            <a class="btn" href="/console" target="_blank" rel="noopener">Open Console →</a>
         </div>
     </div>
-    <div class="rounded-lg border border-gray-200 p-4">
-        <div class="text-xs uppercase text-gray-400">Flow</div>
-        <div class="mt-2 grid grid-cols-2 gap-2 text-sm">
-            <div class="flex items-center justify-between rounded-md bg-yellow-50 px-2 py-1">
-                <span class="text-yellow-800">Waiting</span>
-                <span class="font-semibold text-yellow-900">{{.Data.Stat.Wait}}</span>
-            </div>
-            <div class="flex items-center justify-between rounded-md bg-blue-50 px-2 py-1">
-                <span class="text-blue-800">Active</span>
-                <span class="font-semibold text-blue-900">{{.Data.Stat.Active}}</span>
-            </div>
-            <div class="flex items-center justify-between rounded-md bg-purple-50 px-2 py-1">
-                <span class="text-purple-800">Delayed</span>
-                <span class="font-semibold text-purple-900">{{.Data.Stat.Delayed}}</span>
-            </div>
-            <div class="flex items-center justify-between rounded-md bg-green-50 px-2 py-1">
-                <span class="text-green-800">Completed</span>
-                <span class="font-semibold text-green-900">{{.Data.Stat.Completed}}</span>
-            </div>
+    <div class="card">
+        <h3>Flow</h3>
+        <div class="qgrid">
+            <div class="qcell g-warn"><span class="k">Waiting</span><span class="v">{{.Data.Stat.Wait}}</span></div>
+            <div class="qcell g-flow"><span class="k">Active</span><span class="v">{{.Data.Stat.Active}}</span></div>
+            <div class="qcell g-warn"><span class="k">Delayed</span><span class="v">{{.Data.Stat.Delayed}}</span></div>
+            <div class="qcell g-ok"><span class="k">Completed</span><span class="v">{{.Data.Stat.Completed}}</span></div>
         </div>
     </div>
-    <div class="rounded-lg border border-gray-200 p-4">
-        <div class="text-xs uppercase text-gray-400">Exceptions</div>
-        <div class="mt-2 grid grid-cols-2 gap-2 text-sm">
-            <div class="flex items-center justify-between rounded-md bg-red-50 px-2 py-1">
-                <span class="text-red-800">Failed</span>
-                <span class="font-semibold text-red-900">{{.Data.Stat.Failed}}</span>
-            </div>
-            <div class="flex items-center justify-between rounded-md bg-orange-50 px-2 py-1">
-                <span class="text-orange-800">Stalled</span>
-                <span class="font-semibold text-orange-900">{{.Data.Stat.Stalled}}</span>
-            </div>
-            <div class="flex items-center justify-between rounded-md bg-gray-100 px-2 py-1">
-                <span class="text-gray-700">Orphaned</span>
-                {{if .Data.Stat.OrphanedKnown}}
-                    <span class="font-semibold text-gray-900">{{.Data.Stat.Orphaned}}</span>
-                {{else}}
-                    <span class="text-gray-400" title="Orphaned is available in diagnostics">diag</span>
-                {{end}}
-            </div>
-            <div class="flex items-center justify-between rounded-md bg-slate-50 px-2 py-1">
-                <span class="text-slate-700">Paused</span>
-                <span class="font-semibold text-slate-800">{{.Data.Stat.Paused}}</span>
-            </div>
+    <div class="card">
+        <h3>Exceptions</h3>
+        <div class="qgrid">
+            <div class="qcell g-danger"><span class="k">Failed</span><span class="v">{{.Data.Stat.Failed}}</span></div>
+            <div class="qcell g-danger"><span class="k">Stalled</span><span class="v">{{.Data.Stat.Stalled}}</span></div>
+            <div class="qcell g-muted"><span class="k">Orphaned</span>{{if .Data.Stat.OrphanedKnown}}<span class="v">{{.Data.Stat.Orphaned}}</span>{{else}}<span class="v zero" title="Orphaned is available in diagnostics">diag</span>{{end}}</div>
+            <div class="qcell g-muted"><span class="k">Paused</span><span class="v">{{.Data.Stat.Paused}}</span></div>
         </div>
     </div>
-</div>
 </div>
 `
 
 const queueDetailTmpl = `
-<div id="queue-detail">
+<div id="queue-detail" class="space-y-6">
+<div data-poll-url="/queue/summary?queue={{.Data.Stat.Name}}" data-poll-interval="5000">
 {{.Data.SummaryHTML}}
+</div>
 
-<table class="min-w-full divide-y divide-gray-200 mb-8">
-    <thead class="bg-gray-50">
-        <tr>
-            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">State</th>
-            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider text-center">Count</th>
-            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Preview</th>
-        </tr>
-    </thead>
-    <tbody class="bg-white divide-y divide-gray-200">
-        <tr>
-            <td class="px-6 py-4 text-sm text-yellow-700 font-semibold">Waiting</td>
-            <td class="px-6 py-4 text-sm text-center">{{.Data.Stat.Wait}}</td>
-            <td class="px-6 py-4 text-sm text-gray-600">{{if .Data.Waiting}}{{(index .Data.Waiting 0).ID}}{{else}}—{{end}}</td>
-        </tr>
-        <tr>
-            <td class="px-6 py-4 text-sm text-blue-700 font-semibold">Active</td>
-            <td class="px-6 py-4 text-sm text-center">{{.Data.Stat.Active}}</td>
-            <td class="px-6 py-4 text-sm text-gray-600">{{if .Data.Active}}{{(index .Data.Active 0).ID}}{{else}}—{{end}}</td>
-        </tr>
-        <tr>
-            <td class="px-6 py-4 text-sm text-slate-700 font-semibold">Paused</td>
-            <td class="px-6 py-4 text-sm text-center">{{.Data.Stat.Paused}}</td>
-            <td class="px-6 py-4 text-sm text-gray-600">{{if .Data.Paused}}{{(index .Data.Paused 0).ID}}{{else}}—{{end}}</td>
-        </tr>
-        <tr>
-            <td class="px-6 py-4 text-sm text-fuchsia-700 font-semibold">Prioritized</td>
-            <td class="px-6 py-4 text-sm text-center">{{.Data.Stat.Prioritized}}</td>
-            <td class="px-6 py-4 text-sm text-gray-600">{{if .Data.Prioritized}}{{(index .Data.Prioritized 0).ID}}{{else}}—{{end}}</td>
-        </tr>
-        <tr>
-            <td class="px-6 py-4 text-sm text-amber-700 font-semibold">Waiting-Children</td>
-            <td class="px-6 py-4 text-sm text-center">{{.Data.Stat.WaitingChildren}}</td>
-            <td class="px-6 py-4 text-sm text-gray-600">{{if .Data.WaitingChildren}}{{(index .Data.WaitingChildren 0).ID}}{{else}}—{{end}}</td>
-        </tr>
-        <tr>
-            <td class="px-6 py-4 text-sm text-green-700 font-semibold">Completed</td>
-            <td class="px-6 py-4 text-sm text-center">{{.Data.Stat.Completed}}</td>
-            <td class="px-6 py-4 text-sm text-gray-600">{{if .Data.Completed}}{{(index .Data.Completed 0).ID}}{{else}}—{{end}}</td>
-        </tr>
-        <tr>
-            <td class="px-6 py-4 text-sm text-red-700 font-semibold">Failed</td>
-            <td class="px-6 py-4 text-sm text-center">{{.Data.Stat.Failed}}</td>
-            <td class="px-6 py-4 text-sm text-gray-600">{{if .Data.Failed}}{{(index .Data.Failed 0).ID}}{{else}}—{{end}}</td>
-        </tr>
-        <tr>
-            <td class="px-6 py-4 text-sm text-purple-700 font-semibold">Delayed</td>
-            <td class="px-6 py-4 text-sm text-center">{{.Data.Stat.Delayed}}</td>
-            <td class="px-6 py-4 text-sm text-gray-600">{{if .Data.Delayed}}{{(index .Data.Delayed 0).ID}}{{else}}—{{end}}</td>
-        </tr>
-        <tr>
-            <td class="px-6 py-4 text-sm text-orange-700 font-semibold">🔒 Stalled</td>
-            <td class="px-6 py-4 text-sm text-center"><span class="px-2 py-1 rounded text-xs bg-orange-100 text-orange-800 font-bold">{{.Data.Stat.Stalled}}</span></td>
-            <td class="px-6 py-4 text-sm text-gray-600">—</td>
-        </tr>
-        <tr>
-            <td class="px-6 py-4 text-sm text-gray-700 font-semibold">👻 Orphaned</td>
-            <td class="px-6 py-4 text-sm text-center">
-                {{if .Data.Stat.OrphanedKnown}}
-                    <span class="px-2 py-1 rounded text-xs bg-gray-200 text-gray-700">{{.Data.Stat.Orphaned}}</span>
-                {{else}}
-                    <span class="px-2 py-1 rounded text-xs bg-gray-100 text-gray-500">diag</span>
-                {{end}}
-            </td>
-            <td class="px-6 py-4 text-sm text-gray-600">—</td>
-        </tr>
-        <tr>
-            <td class="px-6 py-4 text-sm text-gray-900 font-bold">📊 Total</td>
-            <td class="px-6 py-4 text-sm text-center"><span class="px-2 py-1 rounded text-xs bg-gray-900 text-white font-bold">{{.Data.Stat.Total}}</span></td>
-            <td class="px-6 py-4 text-sm text-gray-600">—</td>
-        </tr>
-    </tbody>
-</table>
+<div class="table-wrap" style="margin-bottom:20px;">
+    <table>
+        <thead>
+            <tr><th>State</th><th>Count</th><th>Preview</th></tr>
+        </thead>
+        <tbody>
+            <tr><td><span class="state Waiting">Waiting</span></td><td>{{.Data.Stat.Wait}}</td><td class="mono muted">{{if .Data.Waiting}}{{(index .Data.Waiting 0).ID}}{{else}}—{{end}}</td></tr>
+            <tr><td><span class="state Active">Active</span></td><td>{{.Data.Stat.Active}}</td><td class="mono muted">{{if .Data.Active}}{{(index .Data.Active 0).ID}}{{else}}—{{end}}</td></tr>
+            <tr><td><span class="state Paused">Paused</span></td><td>{{.Data.Stat.Paused}}</td><td class="mono muted">{{if .Data.Paused}}{{(index .Data.Paused 0).ID}}{{else}}—{{end}}</td></tr>
+            <tr><td><span class="state Prioritized">Prioritized</span></td><td>{{.Data.Stat.Prioritized}}</td><td class="mono muted">{{if .Data.Prioritized}}{{(index .Data.Prioritized 0).ID}}{{else}}—{{end}}</td></tr>
+            <tr><td><span class="state WaitingChildren">Waiting-Children</span></td><td>{{.Data.Stat.WaitingChildren}}</td><td class="mono muted">{{if .Data.WaitingChildren}}{{(index .Data.WaitingChildren 0).ID}}{{else}}—{{end}}</td></tr>
+            <tr><td><span class="state Completed">Completed</span></td><td>{{.Data.Stat.Completed}}</td><td class="mono muted">{{if .Data.Completed}}{{(index .Data.Completed 0).ID}}{{else}}—{{end}}</td></tr>
+            <tr><td><span class="state Failed">Failed</span></td><td>{{.Data.Stat.Failed}}</td><td class="mono muted">{{if .Data.Failed}}{{(index .Data.Failed 0).ID}}{{else}}—{{end}}</td></tr>
+            <tr><td><span class="state Delayed">Delayed</span></td><td>{{.Data.Stat.Delayed}}</td><td class="mono muted">{{if .Data.Delayed}}{{(index .Data.Delayed 0).ID}}{{else}}—{{end}}</td></tr>
+            <tr><td><span class="state Stalled">Stalled</span></td><td>{{.Data.Stat.Stalled}}</td><td class="muted">—</td></tr>
+            <tr><td><span class="state Orphaned">Orphaned</span></td><td>{{if .Data.Stat.OrphanedKnown}}{{.Data.Stat.Orphaned}}{{else}}<span class="muted">diag</span>{{end}}</td><td class="muted">—</td></tr>
+            <tr><td><span class="state Total">Total</span></td><td>{{.Data.Stat.Total}}</td><td class="muted">—</td></tr>
+        </tbody>
+    </table>
+</div>
 
 <div class="space-y-8">
     {{if .Data.Waiting}}
     <div>
-        <h2 class="text-lg font-semibold text-yellow-700 mb-3">Waiting</h2>
-        <table class="min-w-full divide-y divide-gray-200">
-            <thead class="bg-gray-50">
-                <tr>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Job ID</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
-                </tr>
-            </thead>
-            <tbody class="bg-white divide-y divide-gray-200">
-                {{range .Data.Waiting}}
-                <tr class="hover:bg-gray-50">
-                    <td class="px-6 py-4 text-sm font-mono text-gray-600">{{.ID}}</td>
-                    <td class="px-6 py-4 text-sm text-gray-900">{{.Name}}</td>
-                    <td class="px-6 py-4 text-sm"><a href="/job/detail?queue={{.Queue}}&id={{.ID}}" class="text-indigo-600 hover:text-indigo-900" target="_blank">View →</a></td>
-                </tr>
-                {{end}}
-            </tbody>
-        </table>
+        <div class="section-head">Waiting</div>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>Job ID</th><th>Name</th><th>Actions</th></tr></thead>
+                <tbody>
+                    {{range .Data.Waiting}}
+                    <tr><td class="mono">{{.ID}}</td><td>{{.Name}}</td><td><a class="link" href="/job/detail?queue={{.Queue}}&id={{.ID}}" target="_blank" rel="noopener">View →</a></td></tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
     </div>
     {{end}}
 
     {{if .Data.Active}}
     <div>
-        <h2 class="text-lg font-semibold text-blue-700 mb-3">Active</h2>
-        <table class="min-w-full divide-y divide-gray-200">
-            <thead class="bg-gray-50">
-                <tr>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Job ID</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Attempts</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
-                </tr>
-            </thead>
-            <tbody class="bg-white divide-y divide-gray-200">
-                {{range .Data.Active}}
-                <tr class="hover:bg-gray-50">
-                    <td class="px-6 py-4 text-sm font-mono text-gray-600">{{.ID}}</td>
-                    <td class="px-6 py-4 text-sm text-gray-900">{{.Name}}</td>
-                    <td class="px-6 py-4 text-sm text-gray-600">{{.AttemptsMade}}</td>
-                    <td class="px-6 py-4 text-sm"><a href="/job/detail?queue={{.Queue}}&id={{.ID}}" class="text-indigo-600 hover:text-indigo-900" target="_blank">View →</a></td>
-                </tr>
-                {{end}}
-            </tbody>
-        </table>
+        <div class="section-head">Active</div>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>Job ID</th><th>Name</th><th>Attempts</th><th>Actions</th></tr></thead>
+                <tbody>
+                    {{range .Data.Active}}
+                    <tr><td class="mono">{{.ID}}</td><td>{{.Name}}</td><td>{{.AttemptsMade}}</td><td><a class="link" href="/job/detail?queue={{.Queue}}&id={{.ID}}" target="_blank" rel="noopener">View →</a></td></tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
     </div>
     {{end}}
 
     {{if .Data.Paused}}
     <div>
-        <h2 class="text-lg font-semibold text-slate-700 mb-3">Paused</h2>
-        <table class="min-w-full divide-y divide-gray-200">
-            <thead class="bg-gray-50">
-                <tr>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Job ID</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
-                </tr>
-            </thead>
-            <tbody class="bg-white divide-y divide-gray-200">
-                {{range .Data.Paused}}
-                <tr class="hover:bg-gray-50">
-                    <td class="px-6 py-4 text-sm font-mono text-gray-600">{{.ID}}</td>
-                    <td class="px-6 py-4 text-sm text-gray-900">{{.Name}}</td>
-                    <td class="px-6 py-4 text-sm"><a href="/job/detail?queue={{.Queue}}&id={{.ID}}" class="text-indigo-600 hover:text-indigo-900" target="_blank">View →</a></td>
-                </tr>
-                {{end}}
-            </tbody>
-        </table>
+        <div class="section-head">Paused</div>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>Job ID</th><th>Name</th><th>Actions</th></tr></thead>
+                <tbody>
+                    {{range .Data.Paused}}
+                    <tr><td class="mono">{{.ID}}</td><td>{{.Name}}</td><td><a class="link" href="/job/detail?queue={{.Queue}}&id={{.ID}}" target="_blank" rel="noopener">View →</a></td></tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
     </div>
     {{end}}
 
     {{if .Data.Prioritized}}
     <div>
-        <h2 class="text-lg font-semibold text-fuchsia-700 mb-3">Prioritized</h2>
-        <table class="min-w-full divide-y divide-gray-200">
-            <thead class="bg-gray-50">
-                <tr>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Job ID</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
-                </tr>
-            </thead>
-            <tbody class="bg-white divide-y divide-gray-200">
-                {{range .Data.Prioritized}}
-                <tr class="hover:bg-gray-50">
-                    <td class="px-6 py-4 text-sm font-mono text-gray-600">{{.ID}}</td>
-                    <td class="px-6 py-4 text-sm text-gray-900">{{.Name}}</td>
-                    <td class="px-6 py-4 text-sm"><a href="/job/detail?queue={{.Queue}}&id={{.ID}}" class="text-indigo-600 hover:text-indigo-900" target="_blank">View →</a></td>
-                </tr>
-                {{end}}
-            </tbody>
-        </table>
+        <div class="section-head">Prioritized</div>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>Job ID</th><th>Name</th><th>Actions</th></tr></thead>
+                <tbody>
+                    {{range .Data.Prioritized}}
+                    <tr><td class="mono">{{.ID}}</td><td>{{.Name}}</td><td><a class="link" href="/job/detail?queue={{.Queue}}&id={{.ID}}" target="_blank" rel="noopener">View →</a></td></tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
     </div>
     {{end}}
 
     {{if .Data.WaitingChildren}}
     <div>
-        <h2 class="text-lg font-semibold text-amber-700 mb-3">Waiting-Children</h2>
-        <table class="min-w-full divide-y divide-gray-200">
-            <thead class="bg-gray-50">
-                <tr>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Job ID</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
-                </tr>
-            </thead>
-            <tbody class="bg-white divide-y divide-gray-200">
-                {{range .Data.WaitingChildren}}
-                <tr class="hover:bg-gray-50">
-                    <td class="px-6 py-4 text-sm font-mono text-gray-600">{{.ID}}</td>
-                    <td class="px-6 py-4 text-sm text-gray-900">{{.Name}}</td>
-                    <td class="px-6 py-4 text-sm"><a href="/job/detail?queue={{.Queue}}&id={{.ID}}" class="text-indigo-600 hover:text-indigo-900" target="_blank">View →</a></td>
-                </tr>
-                {{end}}
-            </tbody>
-        </table>
+        <div class="section-head">Waiting-Children</div>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>Job ID</th><th>Name</th><th>Actions</th></tr></thead>
+                <tbody>
+                    {{range .Data.WaitingChildren}}
+                    <tr><td class="mono">{{.ID}}</td><td>{{.Name}}</td><td><a class="link" href="/job/detail?queue={{.Queue}}&id={{.ID}}" target="_blank" rel="noopener">View →</a></td></tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
     </div>
     {{end}}
 
     {{if .Data.Delayed}}
     <div>
-        <h2 class="text-lg font-semibold text-purple-700 mb-3">Delayed</h2>
-        <table class="min-w-full divide-y divide-gray-200">
-            <thead class="bg-gray-50">
-                <tr>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Job ID</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
-                </tr>
-            </thead>
-            <tbody class="bg-white divide-y divide-gray-200">
-                {{range .Data.Delayed}}
-                <tr class="hover:bg-gray-50">
-                    <td class="px-6 py-4 text-sm font-mono text-gray-600">{{.ID}}</td>
-                    <td class="px-6 py-4 text-sm text-gray-900">{{.Name}}</td>
-                    <td class="px-6 py-4 text-sm"><a href="/job/detail?queue={{.Queue}}&id={{.ID}}" class="text-indigo-600 hover:text-indigo-900" target="_blank">View →</a></td>
-                </tr>
-                {{end}}
-            </tbody>
-        </table>
+        <div class="section-head">Delayed</div>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>Job ID</th><th>Name</th><th>Actions</th></tr></thead>
+                <tbody>
+                    {{range .Data.Delayed}}
+                    <tr><td class="mono">{{.ID}}</td><td>{{.Name}}</td><td><a class="link" href="/job/detail?queue={{.Queue}}&id={{.ID}}" target="_blank" rel="noopener">View →</a></td></tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
     </div>
     {{end}}
 
     {{if .Data.Completed}}
     <div>
-        <h2 class="text-lg font-semibold text-green-700 mb-3">Completed</h2>
-        <table class="min-w-full divide-y divide-gray-200">
-            <thead class="bg-gray-50">
-                <tr>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Job ID</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
-                </tr>
-            </thead>
-            <tbody class="bg-white divide-y divide-gray-200">
-                {{range .Data.Completed}}
-                <tr class="hover:bg-gray-50">
-                    <td class="px-6 py-4 text-sm font-mono text-gray-600">{{.ID}}</td>
-                    <td class="px-6 py-4 text-sm text-gray-900">{{.Name}}</td>
-                    <td class="px-6 py-4 text-sm"><a href="/job/detail?queue={{.Queue}}&id={{.ID}}" class="text-indigo-600 hover:text-indigo-900" target="_blank">View →</a></td>
-                </tr>
-                {{end}}
-            </tbody>
-        </table>
+        <div class="section-head">Completed</div>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>Job ID</th><th>Name</th><th>Actions</th></tr></thead>
+                <tbody>
+                    {{range .Data.Completed}}
+                    <tr><td class="mono">{{.ID}}</td><td>{{.Name}}</td><td><a class="link" href="/job/detail?queue={{.Queue}}&id={{.ID}}" target="_blank" rel="noopener">View →</a></td></tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
     </div>
     {{end}}
 
     {{if .Data.Failed}}
     <div>
-        <h2 class="text-lg font-semibold text-red-700 mb-3">Failed</h2>
-        <table class="min-w-full divide-y divide-gray-200">
-            <thead class="bg-gray-50">
-                <tr>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Job ID</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Attempts</th>
-                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
-                </tr>
-            </thead>
-            <tbody class="bg-white divide-y divide-gray-200">
-                {{range .Data.Failed}}
-                <tr class="hover:bg-gray-50">
-                    <td class="px-6 py-4 text-sm font-mono text-gray-600">{{.ID}}</td>
-                    <td class="px-6 py-4 text-sm text-gray-900">{{.Name}}</td>
-                    <td class="px-6 py-4 text-sm text-gray-600">{{.AttemptsMade}}</td>
-                    <td class="px-6 py-4 text-sm"><a href="/job/detail?queue={{.Queue}}&id={{.ID}}" class="text-indigo-600 hover:text-indigo-900" target="_blank">View →</a></td>
-                </tr>
-                {{end}}
-            </tbody>
-        </table>
+        <div class="section-head">Failed</div>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>Job ID</th><th>Name</th><th>Attempts</th><th>Actions</th></tr></thead>
+                <tbody>
+                    {{range .Data.Failed}}
+                    <tr><td class="mono">{{.ID}}</td><td>{{.Name}}</td><td>{{.AttemptsMade}}</td><td><a class="link" href="/job/detail?queue={{.Queue}}&id={{.ID}}" target="_blank" rel="noopener">View →</a></td></tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
     </div>
     {{end}}
+</div>
 </div>
 `
