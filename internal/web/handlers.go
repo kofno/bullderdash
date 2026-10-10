@@ -238,7 +238,7 @@ func JobListHandler(exp *explorer.Explorer) http.HandlerFunc {
 			return
 		}
 
-		err = renderShell(w, "Bull-der-dash - "+queueName, "Queue: "+queueName+" / "+state, jobListTmpl, data)
+		err = renderShell(w, "Bull-der-dash - "+queueName, "Queue: "+queueName+" / "+state, "overview", jobListTmpl, data)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -449,6 +449,12 @@ type pageData struct {
 	// mounted (store enabled). It gates the nav link so disabled deployments
 	// don't advertise a 404.
 	ConsoleEnabled bool
+	// AssetVer is the per-process build id appended to static asset URLs so a
+	// redeploy busts browser caches of the immutable /assets/ files.
+	AssetVer string
+	// NavActive marks the current top-nav section ("overview", "console", …) so
+	// the shell can highlight it. Empty means no item is highlighted.
+	NavActive string
 }
 
 // ConsoleEnabled is set true by main at startup when the job-history store (and
@@ -457,37 +463,41 @@ var ConsoleEnabled bool
 
 const shellTmpl = `
 <!DOCTYPE html>
-<html>
+<html lang="en">
     <head>
-        <script src="https://unpkg.com/htmx.org@1.9.10"></script>
-        <script src="https://cdn.tailwindcss.com"></script>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>{{.Title}}</title>
+        <link rel="stylesheet" href="/assets/app.css?v={{.AssetVer}}">
     </head>
-    <body class="bg-gray-50 p-10">
-        <div class="max-w-6xl mx-auto bg-white shadow rounded-lg p-6">
-        <div class="flex justify-between items-center mb-6">
-            <div>
-                <h1 class="text-2xl font-bold text-indigo-600">🐂 Bullderdash Explorer</h1>
-                {{if .Subtitle}}<div class="text-sm text-gray-500">{{.Subtitle}}</div>{{end}}
+    <body>
+        <header class="app-header">
+            <div class="brand">
+                <a class="title" href="/">Bull-der-dash</a>
+                <span class="subtitle">{{if .Subtitle}}{{.Subtitle}}{{else}}BullMQ / Valkey observability{{end}}</span>
             </div>
-            <div class="flex gap-4 text-sm text-gray-600">
-                <a href="/" class="hover:text-indigo-600">Home</a>
-                <a href="/search" class="font-medium text-indigo-600 hover:text-indigo-800">Search Jobs</a>
-                {{if .ConsoleEnabled}}<a href="/console" class="font-medium text-indigo-600 hover:text-indigo-800">🔎 Console</a>{{end}}
-                <a href="/metrics" target="_blank" class="hover:text-indigo-600">📊 Metrics</a>
-                <a href="/health" target="_blank" class="hover:text-indigo-600">💚 Health</a>
-            </div>
-        </div>
-
+            <nav class="app-nav">
+                <a href="/"{{if eq .NavActive "overview"}} class="active"{{end}}>Overview</a>
+                {{if .ConsoleEnabled}}<a href="/console"{{if eq .NavActive "console"}} class="active"{{end}}>Console</a>{{end}}
+                <a href="/metrics" target="_blank" rel="noopener">Metrics</a>
+                <a href="/health" target="_blank" rel="noopener">Health</a>
+            </nav>
+        </header>
+        <main class="container">
             {{template "content" .}}
-        </div>
+        </main>
+        <script src="/assets/app.js?v={{.AssetVer}}" defer></script>
     </body>
 </html>
 `
 
 const homeContentTmpl = `
-<div id="queue-list" hx-get="/queues" hx-trigger="load, every 5s">
-    Loading queues...
+<div class="page-head">
+    <h1>Overview</h1>
+    <p>Live queue depths and throughput, refreshed automatically.</p>
+</div>
+<div id="queue-list" data-poll-url="/queues" data-poll-interval="5000">
+    <div class="empty">Loading queues…</div>
 </div>
 `
 
@@ -533,7 +543,7 @@ const searchPageTmpl = `
 </div>
 `
 
-func renderShell(w http.ResponseWriter, title, subtitle, contentTmpl string, data interface{}) error {
+func renderShell(w http.ResponseWriter, title, subtitle, navActive, contentTmpl string, data interface{}) error {
 	tmpl, err := template.New("shell").Funcs(template.FuncMap{
 		"add": func(a, b int) int { return a + b },
 		"sub": func(a, b int) int { return a - b },
@@ -553,6 +563,8 @@ func renderShell(w http.ResponseWriter, title, subtitle, contentTmpl string, dat
 		Subtitle:       subtitle,
 		Data:           data,
 		ConsoleEnabled: ConsoleEnabled,
+		AssetVer:       AssetBuildID(),
+		NavActive:      navActive,
 	})
 }
 
@@ -573,7 +585,7 @@ func parsePositiveInt(raw string, fallback int) int {
 // HomeHandler renders the main dashboard shell
 func HomeHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		err := renderShell(w, "Bull-der-dash", "", homeContentTmpl, nil)
+		err := renderShell(w, "Bull-der-dash", "", "overview", homeContentTmpl, nil)
 		if err != nil {
 			log.Printf("❌ renderShell error (home): %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -609,7 +621,7 @@ func SearchPageHandler(exp *explorer.Explorer, prefix string, cache *DashboardCa
 			SelectedQueue: selectedQueue,
 			Query:         query,
 		}
-		err := renderShell(w, "Bull-der-dash - Search", "Search jobs across states in paged windows", searchPageTmpl, data)
+		err := renderShell(w, "Bull-der-dash - Search", "Search jobs across states in paged windows", "", searchPageTmpl, data)
 		if err != nil {
 			log.Printf("❌ renderShell error (search): %v", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -705,7 +717,7 @@ func QueueDetailHandler(exp *explorer.Explorer, prefix string) http.HandlerFunc 
 			Delayed:         delayed,
 		}
 
-		err = renderShell(w, "Bull-der-dash - "+queueName, "Queue: "+queueName, queueDetailTmpl, data)
+		err = renderShell(w, "Bull-der-dash - "+queueName, "Queue: "+queueName, "overview", queueDetailTmpl, data)
 		if err != nil {
 			log.Printf("❌ renderShell error (queue=%s): %v", queueName, err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
