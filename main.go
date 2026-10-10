@@ -62,6 +62,8 @@ func normalizePath(path string) (string, bool) {
 		return "/job/detail", true
 	case path == "/v1/search":
 		return "/v1/search", true
+	case path == "/v1/stats/job-names":
+		return "/v1/stats/job-names", true
 	case strings.HasPrefix(path, "/v1/jobs/"):
 		return "/v1/jobs/:id", true
 	case path == "/console":
@@ -146,6 +148,7 @@ func main() {
 	if jobStore != nil {
 		searchAPI := web.NewSearchAPI(jobStore, cfg.StoreReadConcurrency)
 		mux.HandleFunc("/v1/search", searchAPI.SearchHandler())
+		mux.HandleFunc("/v1/stats/job-names", searchAPI.JobNameStatsHandler())
 		mux.HandleFunc("/v1/jobs/", searchAPI.JobDetailHandler())
 		mux.HandleFunc("/console", web.ConsoleHandler())
 		web.ConsoleEnabled = true

@@ -5,18 +5,21 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/kofno/bullderdash/internal/store"
 )
 
 type fakeReader struct {
-	rows    []store.SearchRow
-	detail  *store.JobDetail
-	getErr  error
-	lastP   store.SearchParams
-	block   chan struct{} // if set, Search blocks until closed
-	entered chan struct{} // signalled when Search is entered
+	rows     []store.SearchRow
+	detail   *store.JobDetail
+	getErr   error
+	lastP    store.SearchParams
+	statRows []store.JobNameStat
+	lastStat store.JobNameStatsParams
+	block    chan struct{} // if set, Search blocks until closed
+	entered  chan struct{} // signalled when Search is entered
 }
 
 func (f *fakeReader) Search(ctx context.Context, p store.SearchParams) ([]store.SearchRow, error) {
@@ -35,6 +38,11 @@ func (f *fakeReader) Get(ctx context.Context, id string) (*store.JobDetail, erro
 		return nil, f.getErr
 	}
 	return f.detail, nil
+}
+
+func (f *fakeReader) TopJobNames(ctx context.Context, p store.JobNameStatsParams) ([]store.JobNameStat, error) {
+	f.lastStat = p
+	return f.statRows, nil
 }
 
 func TestSearchHandlerRequiresPredicate(t *testing.T) {
@@ -135,4 +143,55 @@ func TestSearchHandlerSaturationReturns503(t *testing.T) {
 		t.Fatalf("expected 503 when saturated, got %d", rec.Code)
 	}
 	close(fr.block)
+}
+
+func TestJobNameStatsHandler(t *testing.T) {
+	fr := &fakeReader{statRows: []store.JobNameStat{
+		{Name: "process-device-action", Queue: "Legacy", State: "Completed", Count: 42},
+	}}
+	api := NewSearchAPI(fr, 4)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/stats/job-names?queue=Legacy&state=Completed&since_ms=99&limit=15", nil)
+	rec := httptest.NewRecorder()
+	api.JobNameStatsHandler()(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if fr.lastStat.Queue != "Legacy" || fr.lastStat.State != "Completed" ||
+		fr.lastStat.SinceMs != 99 || fr.lastStat.Limit != 15 {
+		t.Fatalf("params not threaded: %+v", fr.lastStat)
+	}
+	var out []store.JobNameStat
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("bad json: %v", err)
+	}
+	if len(out) != 1 || out[0].Name != "process-device-action" || out[0].Count != 42 {
+		t.Fatalf("unexpected body: %+v", out)
+	}
+}
+
+func TestJobNameStatsHandlerNormalizesGrafanaQueue(t *testing.T) {
+	cases := []string{"", "All", "$queue", ".*", "(Legacy|Workflow)", "a,b"}
+	for _, q := range cases {
+		fr := &fakeReader{}
+		api := NewSearchAPI(fr, 4)
+		req := httptest.NewRequest(http.MethodGet, "/v1/stats/job-names?queue="+url.QueryEscape(q), nil)
+		rec := httptest.NewRecorder()
+		api.JobNameStatsHandler()(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("queue %q: expected 200, got %d", q, rec.Code)
+		}
+		if fr.lastStat.Queue != "" {
+			t.Fatalf("queue %q: expected no filter, got %q", q, fr.lastStat.Queue)
+		}
+	}
+
+	// A plain single queue name passes through as an exact filter.
+	fr := &fakeReader{}
+	api := NewSearchAPI(fr, 4)
+	req := httptest.NewRequest(http.MethodGet, "/v1/stats/job-names?queue=Legacy", nil)
+	api.JobNameStatsHandler()(httptest.NewRecorder(), req)
+	if fr.lastStat.Queue != "Legacy" {
+		t.Fatalf("expected exact queue filter, got %q", fr.lastStat.Queue)
+	}
 }

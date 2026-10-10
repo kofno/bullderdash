@@ -17,6 +17,7 @@ import (
 type StoreReader interface {
 	Search(ctx context.Context, p store.SearchParams) ([]store.SearchRow, error)
 	Get(ctx context.Context, id string) (*store.JobDetail, error)
+	TopJobNames(ctx context.Context, p store.JobNameStatsParams) ([]store.JobNameStat, error)
 }
 
 // SearchAPI serves the AnvilMQ-console-compatible JSON endpoints
@@ -96,6 +97,57 @@ func (a *SearchAPI) SearchHandler() http.HandlerFunc {
 		}
 		writeJSON(w, http.StatusOK, rows)
 	}
+}
+
+// JobNameStatsHandler implements GET /v1/stats/job-names. It returns the
+// highest-volume job names from history, grouped by (name, queue, state).
+// Unlike the Prometheus-backed panel it never collapses names into an
+// "__other__" bucket. All query params (queue, state, since_ms, limit) are
+// optional, so no predicate is required.
+func (a *SearchAPI) JobNameStatsHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		params := store.JobNameStatsParams{
+			Queue:   normalizeQueueFilter(r.URL.Query().Get("queue")),
+			State:   strings.TrimSpace(r.URL.Query().Get("state")),
+			SinceMs: parseInt64(r.URL.Query().Get("since_ms")),
+			Limit:   parseIntDefault(r.URL.Query().Get("limit"), 0),
+		}
+
+		if !a.acquire() {
+			writeJSONError(w, http.StatusServiceUnavailable, "search reader busy")
+			return
+		}
+		defer a.release()
+
+		rows, err := a.reader.TopJobNames(r.Context(), params)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "stats query failed")
+			return
+		}
+		writeJSON(w, http.StatusOK, rows)
+	}
+}
+
+// normalizeQueueFilter maps Grafana's multi-select sentinels to "no filter" so
+// the panel can pass ${queue} straight through. An empty value, the literal
+// "All", an uninterpolated "$queue", or anything containing regex/alternation
+// metacharacters (e.g. the ".*" all-value or a "(a|b)" multi-select) becomes
+// unfiltered; a plain single queue name is used as an exact match.
+func normalizeQueueFilter(q string) string {
+	q = strings.TrimSpace(q)
+	switch q {
+	case "", "All", "$queue":
+		return ""
+	}
+	if strings.ContainsAny(q, `.*|(){}[]^$\,`) {
+		return ""
+	}
+	return q
 }
 
 // JobDetailHandler implements GET /v1/jobs/{id}.

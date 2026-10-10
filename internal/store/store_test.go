@@ -120,6 +120,73 @@ func TestStoreLifecycle(t *testing.T) {
 	}
 }
 
+func TestTopJobNames(t *testing.T) {
+	s := newTestStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Run(ctx)
+
+	now := time.Now().UnixMilli()
+	// alpha: 3 completed on Legacy. beta: 2 completed on Legacy. gamma: 1 failed on Workflow.
+	for i := 0; i < 3; i++ {
+		s.Enqueue(Record{ID: "a" + string(rune('0'+i)), Queue: "Legacy", Name: "alpha", State: "completed", Attempts: 1, FinishedAtMs: now, Data: `{"k":1}`})
+	}
+	for i := 0; i < 2; i++ {
+		s.Enqueue(Record{ID: "b" + string(rune('0'+i)), Queue: "Legacy", Name: "beta", State: "completed", Attempts: 1, FinishedAtMs: now, Data: `{"k":2}`})
+	}
+	s.Enqueue(Record{ID: "g0", Queue: "Workflow", Name: "gamma", State: "failed", Attempts: 1, FinishedAtMs: now, Data: `{"k":3}`})
+
+	waitForID(t, s, SearchParams{Query: "gamma"}, "g0")
+
+	// Global ordering by count desc.
+	all, err := s.TopJobNames(ctx, JobNameStatsParams{})
+	if err != nil {
+		t.Fatalf("TopJobNames: %v", err)
+	}
+	if len(all) != 3 || all[0].Name != "alpha" || all[0].Count != 3 {
+		t.Fatalf("expected alpha(3) first, got %+v", all)
+	}
+	if all[1].Name != "beta" || all[1].Count != 2 {
+		t.Fatalf("expected beta(2) second, got %+v", all)
+	}
+
+	// Queue filter.
+	wf, err := s.TopJobNames(ctx, JobNameStatsParams{Queue: "Workflow"})
+	if err != nil {
+		t.Fatalf("TopJobNames queue: %v", err)
+	}
+	if len(wf) != 1 || wf[0].Name != "gamma" {
+		t.Fatalf("queue filter wrong: %+v", wf)
+	}
+
+	// State filter (case-insensitive via titleState).
+	failed, err := s.TopJobNames(ctx, JobNameStatsParams{State: "failed"})
+	if err != nil {
+		t.Fatalf("TopJobNames state: %v", err)
+	}
+	if len(failed) != 1 || failed[0].Name != "gamma" {
+		t.Fatalf("state filter wrong: %+v", failed)
+	}
+
+	// Limit clamp.
+	one, err := s.TopJobNames(ctx, JobNameStatsParams{Limit: 1})
+	if err != nil {
+		t.Fatalf("TopJobNames limit: %v", err)
+	}
+	if len(one) != 1 || one[0].Name != "alpha" {
+		t.Fatalf("limit wrong: %+v", one)
+	}
+
+	// since_ms excludes older rows.
+	none, err := s.TopJobNames(ctx, JobNameStatsParams{SinceMs: now + 1_000_000})
+	if err != nil {
+		t.Fatalf("TopJobNames since_ms: %v", err)
+	}
+	if len(none) != 0 {
+		t.Fatalf("expected no rows past future since_ms, got %+v", none)
+	}
+}
+
 func TestSearchErroredFilter(t *testing.T) {
 	s := newTestStore(t)
 	ctx, cancel := context.WithCancel(context.Background())

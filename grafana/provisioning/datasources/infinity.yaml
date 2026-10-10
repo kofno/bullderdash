@@ -1,0 +1,18 @@
+apiVersion: 1
+
+# Infinity datasource for the SQLite-backed "Top job names" panel. It queries
+# the bull-der-dash JSON API (/v1/stats/job-names) so the table reports exact,
+# uncapped job-name volumes instead of the Prometheus "__other__" bucket.
+#
+# Panel targets supply their own absolute URL (http://host.docker.internal:8080
+# reaches a bull-der-dash running on the host), so no base URL is set here.
+datasources:
+  - name: bull-der-dash API
+    uid: bdd-api
+    type: yesoreyeram-infinity-datasource
+    access: proxy
+    isDefault: false
+    editable: true
+    jsonData:
+      allowedHosts:
+        - http://host.docker.internal:8080

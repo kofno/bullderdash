@@ -1181,11 +1181,11 @@
     {
       "id": 16,
       "type": "table",
-      "title": "Top job names (5m)",
-      "description": "Highest-volume job names over the last 5 minutes.",
+      "title": "Top job names (history)",
+      "description": "Highest-volume job names from the SQLite history store (/v1/stats/job-names), scoped to the dashboard time range. Exact per-name counts with no Prometheus cardinality cap, so no \"__other__\" bucket. The $queue variable is honored for a single selection; \"All\" or a multi-select shows every queue. Requires a bull-der-dash build with the SQLite store enabled.",
       "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "bdd-api"
       },
       "gridPos": {
         "h": 7,
@@ -1228,42 +1228,51 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "bdd-api"
           },
-          "editorMode": "code",
-          "expr": "topk(15, sum by (queue, name, result) (increase(bullmq_jobs_finished_total{queue=~\"$queue\", name=~\"$name\"}[5m])))",
-          "range": false,
-          "instant": true,
           "refId": "A",
-          "format": "table"
+          "type": "json",
+          "source": "url",
+          "format": "table",
+          "parser": "backend",
+          "url": "http://host.docker.internal:8080/v1/stats/job-names?since_ms=${__from}&queue=${queue}&limit=15",
+          "url_options": {
+            "method": "GET"
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "name",
+              "text": "Job name",
+              "type": "string"
+            },
+            {
+              "selector": "queue",
+              "text": "Queue",
+              "type": "string"
+            },
+            {
+              "selector": "state",
+              "text": "Result",
+              "type": "string"
+            },
+            {
+              "selector": "count",
+              "text": "Jobs (window)",
+              "type": "number"
+            }
+          ]
         }
       ],
       "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true,
-              "__name__": true,
-              "job": true,
-              "instance": true
-            },
-            "renameByName": {
-              "queue": "Queue",
-              "name": "Job name",
-              "result": "Result",
-              "Value": "Jobs (5m)"
-            }
-          }
-        },
         {
           "id": "sortBy",
           "options": {
             "fields": "",
             "sort": [
               {
-                "field": "Jobs (5m)",
+                "field": "Jobs (window)",
                 "desc": true
               }
             ]

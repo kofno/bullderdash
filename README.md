@@ -185,6 +185,7 @@ Sentinel behavior:
 Available when `STORE_ENABLED=true`; backs the `/console` UI and is safe to call directly.
 - `GET /v1/search?q=&name=&state=&trace_id=&errored=&since_ms=&limit=` - Search persisted history (requires at least one of `q`/`name`/`state`/`trace_id`/`errored`/`since_ms`; returns `400` otherwise, `503` when the reader is saturated). `state` only matches the settled states history records (`Completed`/`Failed`). `since_ms` is a standalone "finished within" window (Unix ms lower bound on `finished_at`).
 - `GET /v1/jobs/{id}` - Full persisted detail for one job (`404` if it has aged out of retention)
+- `GET /v1/stats/job-names?queue=&state=&since_ms=&limit=` - Highest-volume job names from history, grouped by `(name, queue, state)` and ordered by count descending. All filters are optional (no predicate required). Unlike the Prometheus `bullmq_jobs_finished_total` labels — which cap distinct names per queue and collapse the overflow into an `__other__` bucket — this report uses the raw, uncapped job name recorded for every job, so it is exact and never emits `__other__`. Powers the Grafana "Top job names" table via the Infinity datasource. `queue` is treated as an exact match for a single name; empty, `All`, `.*`, or any value containing regex/alternation characters (e.g. a Grafana multi-select) is ignored so every queue is included.
 
 > **Settled state only.** The history store captures *terminal* job events
 > (`completed`/`failed`) — transient states (`active`/`waiting`/`delayed`) are

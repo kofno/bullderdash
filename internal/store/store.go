@@ -61,6 +61,18 @@ type JobDetail struct {
 	Opts string `json:"opts"`
 }
 
+// JobNameStat is one aggregated row of the top-job-names report
+// (/v1/stats/job-names): a count of persisted jobs grouped by name, queue and
+// terminal state. Because history records the real, uncapped job name for
+// every job, this report is exact and never collapses names into the
+// Prometheus "__other__" cardinality bucket.
+type JobNameStat struct {
+	Name  string `json:"name"`
+	Queue string `json:"queue"`
+	State string `json:"state"`
+	Count int64  `json:"count"`
+}
+
 // SearchParams are the supported query predicates. An empty struct (no
 // predicate) is rejected by the caller, matching the console contract.
 type SearchParams struct {
@@ -69,6 +81,16 @@ type SearchParams struct {
 	State   string // exact state
 	TraceID string // exact trace id (lineage drill-down)
 	Errored bool   // when true, restrict to jobs that recorded an error or retried (last_error <> '' OR attempts > 1)
+	SinceMs int64  // finished_at >= SinceMs when > 0
+	Limit   int
+}
+
+// JobNameStatsParams are the optional filters for TopJobNames. An empty struct
+// returns the global top names across all queues/states (no predicate is
+// required, unlike Search).
+type JobNameStatsParams struct {
+	Queue   string // optional exact queue filter
+	State   string // optional exact terminal state filter (Completed/Failed)
 	SinceMs int64  // finished_at >= SinceMs when > 0
 	Limit   int
 }
@@ -404,6 +426,59 @@ func (s *Store) Search(ctx context.Context, p SearchParams) ([]SearchRow, error)
 		var r SearchRow
 		if err := rows.Scan(&r.ID, &r.Name, &r.State, &r.Attempts, &r.ExecutionDepth,
 			&r.TraceID, &r.CreatedAt, &r.FinishedAt, &r.LastError, &r.Queue); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// TopJobNames returns the highest-volume job names grouped by (name, queue,
+// state), ordered by count descending. It is the exact, SQLite-backed source
+// for the Grafana "Top job names" panel: unlike the capped Prometheus labels,
+// it reports every real job name and never emits a "__other__" bucket. All
+// filters are optional.
+func (s *Store) TopJobNames(ctx context.Context, p JobNameStatsParams) ([]JobNameStat, error) {
+	limit := p.Limit
+	if limit <= 0 {
+		limit = defaultLimit
+	}
+	if limit > maxLimit {
+		limit = maxLimit
+	}
+
+	var (
+		sb   strings.Builder
+		args []any
+	)
+	sb.WriteString(`SELECT name, queue, state, COUNT(*) AS c FROM job_history WHERE 1=1`)
+	if p.Queue != "" {
+		sb.WriteString(` AND queue = ?`)
+		args = append(args, p.Queue)
+	}
+	if p.State != "" {
+		sb.WriteString(` AND state = ?`)
+		args = append(args, titleState(p.State))
+	}
+	if p.SinceMs > 0 {
+		sb.WriteString(` AND finished_at >= ?`)
+		args = append(args, p.SinceMs)
+	}
+	sb.WriteString(` GROUP BY name, queue, state ORDER BY c DESC, name ASC LIMIT ?`)
+	args = append(args, limit)
+
+	start := time.Now()
+	rows, err := s.db.QueryContext(ctx, sb.String(), args...)
+	metrics.StoreQueryDuration.WithLabelValues("stats_job_names").Observe(time.Since(start).Seconds())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]JobNameStat, 0, limit)
+	for rows.Next() {
+		var r JobNameStat
+		if err := rows.Scan(&r.Name, &r.Queue, &r.State, &r.Count); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
