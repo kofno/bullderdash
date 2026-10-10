@@ -137,6 +137,9 @@ func main() {
 	// Main dashboard
 	mux.HandleFunc("/", web.HomeHandler())
 
+	// Shared static assets (Anvil design system + JS helpers), served same-origin.
+	mux.HandleFunc("/assets/", web.AssetsHandler())
+
 	mux.HandleFunc("/queues", web.DashboardHandler(exp, cfg.QueuePrefix, dashboardCache))
 	mux.HandleFunc("/queue/jobs", web.JobListHandler(exp))
 	mux.HandleFunc("/queue/summary", web.QueueSummaryHandler(exp, cfg.QueuePrefix))
