@@ -373,7 +373,7 @@ single replica (one RWO PVC + `Recreate` strategy); scale vertically instead.
 - **Memory**: 20-30 MB (higher with a large SQLite page cache under active search)
 - **CPU**: 0.1 cores (idle), 0.5 cores (active)
 - **Network**: Minimal (Redis protocol is efficient)
-- **Disk**: 20 MB (binary only); plus the SQLite history DB on the mounted volume when persistence is enabled
+- **Disk**: 20 MB (binary only); plus the SQLite history DB on the mounted volume when persistence is enabled. The DB plateaus at a steady size bounded by the retention TTLs (it does not grow without bound), but the FTS5 full-text index roughly doubles the storage of indexed text — see "Storage sizing and the FTS index" in `DOCS.md`
 
 ### Bottlenecks
 1. **Redis connection limit** - Use connection pooling (already implemented)
