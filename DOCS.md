@@ -113,6 +113,51 @@ background writer, and a sweeper ages them out per the `STORE_*_TTL_HOURS`
 settings (failures are kept longer than successes). Search and job-detail reads
 are served from SQLite, never from live Redis.
 
+#### Storage sizing and the FTS index
+
+The history store is backed by an SQLite FTS5 full-text index (`job_fts`) over
+the job `id`, `name`, `trace_id`, `last_error`, and the full `data` payload.
+This has two consequences worth planning for:
+
+- **The database is larger than the raw job data.** FTS5 keeps an inverted
+  index of every indexed term, so indexed text — especially large JSON payloads
+  stored in `data` and stacktraces in `last_error` — is effectively stored
+  twice (once in the base row, once in the index). Expect the FTS index to be a
+  substantial fraction of total file size, often roughly as large as the base
+  table for payload-heavy workloads.
+
+- **The file size plateaus at a steady state, it does not grow without bound.**
+  Retained rows are bounded by `STORE_COMPLETED_TTL_HOURS` and
+  `STORE_FAILED_TTL_HOURS`, so the resident row count stops growing once the
+  oldest tier reaches its TTL (24h for completed by default). From then on the
+  sweeper deletes about as fast as new jobs arrive. SQLite returns freed pages
+  to an internal free-list and **reuses** them for new inserts rather than
+  returning them to the OS, so the file holds near its high-water mark instead
+  of shrinking. A high-throughput queue therefore reaches a stable size roughly
+  equal to `completed_rate × completed_TTL` (plus the much smaller failed tier
+  and the FTS index) within one `completed_TTL` window — the initial fast growth
+  is this one-time ramp, not runaway growth.
+
+Sizing guidance:
+
+- Size the volume for the steady-state footprint: approximately
+  `jobs_per_hour × STORE_COMPLETED_TTL_HOURS × bytes_per_indexed_job`, where
+  `bytes_per_indexed_job` includes the FTS overhead (measure it on your own
+  payloads; payload-heavy jobs can run ~1–2 KB/row or more).
+- The largest lever on size is **what you index and how long you keep it**:
+  lower `STORE_COMPLETED_TTL_HOURS` to shrink the dominant completed tier, and
+  trim large fields from the job payload before they reach the store if full
+  payloads are not needed for search.
+- `VACUUM` is **not** recommended as routine maintenance. Because the store
+  continuously churns (inserts ≈ deletes at steady state), freed pages are
+  reused almost immediately, so a `VACUUM` reclaims little lasting space while
+  taking an exclusive write lock (buffered writes drop during it) and needing
+  free disk roughly equal to the database size. It is only worthwhile as a
+  one-shot step *after* you reduce retention, run during a low-traffic window.
+- Failures are retained longer (14 days by default) but are typically a tiny
+  fraction of traffic, so the failed tier is usually a negligible contributor to
+  total size.
+
 Example p95 processing duration:
 ```promql
 histogram_quantile(
