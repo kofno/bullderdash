@@ -33,11 +33,13 @@ type Config struct {
 	StoreBatchSize         int
 	StoreFlushMillis       int
 	StoreTraceKeys         []string
-	StoreCompletedTTLHours int
-	StoreFailedTTLHours    int
-	StoreSweepSeconds      int
-	StoreMaxRows           int
-	StoreReadConcurrency   int
+	StoreCompletedTTLHours   int
+	StoreFailedTTLHours      int
+	StoreSweepSeconds        int
+	StoreSweepBatchSize      int
+	StoreSweepTimeoutSeconds int
+	StoreMaxRows             int
+	StoreReadConcurrency     int
 	LogLevel               string
 }
 
@@ -71,6 +73,8 @@ func Load() *Config {
 		StoreCompletedTTLHours:         getEnvInt("STORE_COMPLETED_TTL_HOURS", 24),
 		StoreFailedTTLHours:            getEnvInt("STORE_FAILED_TTL_HOURS", 336),
 		StoreSweepSeconds:              getEnvInt("STORE_SWEEP_SECONDS", 300),
+		StoreSweepBatchSize:            getEnvInt("STORE_SWEEP_BATCH", 2000),
+		StoreSweepTimeoutSeconds:       getEnvInt("STORE_SWEEP_TIMEOUT_SECONDS", 0),
 		StoreMaxRows:                   getEnvInt("STORE_MAX_ROWS", 0),
 		StoreReadConcurrency:           getEnvInt("STORE_READ_CONCURRENCY", 16),
 		LogLevel:                       getEnv("LOG_LEVEL", "info"),

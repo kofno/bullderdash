@@ -123,6 +123,10 @@ spec:
               value: {{ .Values.env.store.failedTtlHours | quote }}
             - name: STORE_SWEEP_SECONDS
               value: {{ .Values.env.store.sweepSeconds | quote }}
+            - name: STORE_SWEEP_BATCH
+              value: {{ .Values.env.store.sweepBatch | quote }}
+            - name: STORE_SWEEP_TIMEOUT_SECONDS
+              value: {{ .Values.env.store.sweepTimeoutSeconds | quote }}
             - name: STORE_MAX_ROWS
               value: {{ .Values.env.store.maxRows | quote }}
             - name: STORE_READ_CONCURRENCY

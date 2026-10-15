@@ -99,6 +99,8 @@ Environment variables:
 - `STORE_COMPLETED_TTL_HOURS` (default `24`) - retention for non-failed history; `0` disables
 - `STORE_FAILED_TTL_HOURS` (default `336`) - retention for failed history (14 days); `0` disables
 - `STORE_SWEEP_SECONDS` (default `300`) - interval between retention sweeps
+- `STORE_SWEEP_BATCH` (default `2000`) - rows deleted per sweep statement; small batches keep each DELETE (and its per-row FTS5 trigger work) fast so a large backlog drains across many small transactions instead of one oversized DELETE
+- `STORE_SWEEP_TIMEOUT_SECONDS` (default `0`) - optional per-sweep deadline; `0` means no artificial deadline (the sweep drains the eligible backlog in batches, cancelling only on shutdown)
 - `STORE_MAX_ROWS` (default `0`) - optional hard cap on total history rows; `0` disables
 - `STORE_READ_CONCURRENCY` (default `16`) - max concurrent search/detail reads; excess gets `503`
 - `LOG_LEVEL` (default `info`)
@@ -137,6 +139,15 @@ This has two consequences worth planning for:
   equal to `completed_rate × completed_TTL` (plus the much smaller failed tier
   and the FTS index) within one `completed_TTL` window — the initial fast growth
   is this one-time ramp, not runaway growth.
+
+- **The plateau assumes the sweeper keeps pace with ingest.** Each sweep deletes
+  in bounded batches (`STORE_SWEEP_BATCH`, default 2000 rows per statement) and
+  loops until the eligible backlog is drained, so one sweep can clear far more
+  than a single batch. If sustained throughput outruns the sweeper (resident
+  rows and file size keep climbing past one `completed_TTL`), shorten
+  `STORE_SWEEP_SECONDS` so sweeps run more often and/or raise `STORE_SWEEP_BATCH`
+  so each sweep clears more per statement. Watch `bullderdash_store_sweep_deleted_total`:
+  it should keep climbing in step with `bullderdash_store_writes_total`.
 
 Sizing guidance:
 

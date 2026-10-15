@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -267,5 +268,45 @@ func TestSweepFailedTTLAndMaxRows(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].ID != "cap-e" {
 		t.Fatalf("MaxRows cap wrong, got %+v", rows)
+	}
+}
+
+// TestSweepBatchedDrain proves the sweeper clears a backlog larger than a
+// single delete batch: with BatchSize smaller than the eligible set, the loop
+// must iterate until every expired row is gone.
+func TestSweepBatchedDrain(t *testing.T) {
+	s := newTestStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Run(ctx)
+
+	const n = 50
+	old := time.Now().Add(-48 * time.Hour).UnixMilli()
+	for i := 0; i < n; i++ {
+		s.Enqueue(Record{
+			ID:           "old-" + strconv.Itoa(i),
+			Queue:        "q",
+			Name:         "n",
+			State:        "completed",
+			FinishedAtMs: old + int64(i),
+			Data:         `{"k":1}`,
+		})
+	}
+	waitForID(t, s, SearchParams{State: "Completed"}, "old-"+strconv.Itoa(n-1))
+
+	// BatchSize 10 against 50 eligible rows forces multiple delete iterations.
+	deleted, err := s.Sweep(ctx, Retention{CompletedTTL: time.Hour, BatchSize: 10})
+	if err != nil {
+		t.Fatalf("Sweep batched: %v", err)
+	}
+	if deleted != n {
+		t.Fatalf("expected %d rows swept across batches, got %d", n, deleted)
+	}
+	rows, err := s.Search(ctx, SearchParams{State: "Completed", Limit: 1000})
+	if err != nil {
+		t.Fatalf("Search after batched sweep: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("expected empty after batched drain, got %d rows", len(rows))
 	}
 }
