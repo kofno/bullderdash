@@ -96,11 +96,15 @@ type JobNameStatsParams struct {
 }
 
 // Retention controls the sweeper. A zero duration disables that tier; a zero
-// MaxRows disables the hard cap.
+// MaxRows disables the hard cap. BatchSize bounds how many rows each DELETE
+// statement removes so a large backlog is cleared across many small
+// transactions instead of one oversized DELETE; a zero falls back to
+// defaultSweepBatch.
 type Retention struct {
 	CompletedTTL time.Duration
 	FailedTTL    time.Duration
 	MaxRows      int64
+	BatchSize    int64
 }
 
 // Config configures the store and its async writer.
@@ -121,6 +125,13 @@ type Store struct {
 
 const defaultLimit = 100
 const maxLimit = 1000
+
+// defaultSweepBatch bounds the rows removed per sweep DELETE when Retention
+// does not specify a BatchSize. Small batches keep each statement (and its
+// per-row FTS5 delete-trigger work) fast enough to commit well inside any
+// sweep deadline, so a large backlog drains incrementally instead of a single
+// oversized DELETE repeatedly blowing the context deadline and rolling back.
+const defaultSweepBatch = 2000
 
 // New opens (creating if needed) the SQLite database, applies migrations and
 // returns a ready Store. Call Run to start the async writer.
@@ -519,15 +530,36 @@ func (s *Store) Sweep(ctx context.Context, r Retention) (int64, error) {
 	now := time.Now()
 	var total int64
 
+	batch := r.BatchSize
+	if batch <= 0 {
+		batch = defaultSweepBatch
+	}
+
+	// del removes every row matching where, in bounded batches. Each batch is
+	// its own autocommit DELETE, so the write lock is released between batches
+	// (letting the async writer interleave) and progress is durable and
+	// reflected in the sweep_deleted metric as it goes. The loop stops when a
+	// batch deletes fewer than the batch size (backlog drained) or the context
+	// is cancelled.
 	del := func(where string, args ...any) error {
-		res, err := s.db.ExecContext(ctx, `DELETE FROM job_history WHERE `+where, args...)
-		if err != nil {
-			return err
+		q := `DELETE FROM job_history WHERE rowid IN (
+			SELECT rowid FROM job_history WHERE ` + where + ` LIMIT ?)`
+		for {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			params := append(append([]any(nil), args...), batch)
+			res, err := s.db.ExecContext(ctx, q, params...)
+			if err != nil {
+				return err
+			}
+			n, _ := res.RowsAffected()
+			total += n
+			metrics.StoreSweepDeleted.Add(float64(n))
+			if n < batch {
+				return nil
+			}
 		}
-		n, _ := res.RowsAffected()
-		total += n
-		metrics.StoreSweepDeleted.Add(float64(n))
-		return nil
 	}
 
 	if r.FailedTTL > 0 {

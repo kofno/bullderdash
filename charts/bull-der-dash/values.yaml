@@ -72,6 +72,14 @@ env:
     completedTtlHours: 24
     failedTtlHours: 336
     sweepSeconds: 300
+    # Rows removed per sweep DELETE. Small batches keep each statement fast
+    # (the FTS5 delete-trigger fires per row) so a large backlog drains across
+    # many small transactions instead of one oversized DELETE that can exceed
+    # the sweep deadline and roll back.
+    sweepBatch: 2000
+    # Per-sweep deadline in seconds. 0 means no artificial deadline: the sweep
+    # drains the eligible backlog in batches, cancelling only on shutdown.
+    sweepTimeoutSeconds: 0
     maxRows: 0
     readConcurrency: 16
   logLevel: "info"
