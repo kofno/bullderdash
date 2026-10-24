@@ -125,6 +125,8 @@ spec:
               value: {{ .Values.env.store.sweepSeconds | quote }}
             - name: STORE_SWEEP_BATCH
               value: {{ .Values.env.store.sweepBatch | quote }}
+            - name: STORE_SWEEP_PAUSE_MILLIS
+              value: {{ .Values.env.store.sweepPauseMillis | quote }}
             - name: STORE_SWEEP_TIMEOUT_SECONDS
               value: {{ .Values.env.store.sweepTimeoutSeconds | quote }}
             - name: STORE_MAX_ROWS
@@ -178,4 +180,3 @@ spec:
           persistentVolumeClaim:
             claimName: {{ .Values.persistence.existingClaim | default (printf "%s-data" (include "bull-der-dash.fullname" .)) }}
       {{- end }}
-

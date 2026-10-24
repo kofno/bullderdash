@@ -293,10 +293,11 @@ func startSweeper(ctx context.Context, s *store.Store, cfg *config.Config) {
 		FailedTTL:    time.Duration(cfg.StoreFailedTTLHours) * time.Hour,
 		MaxRows:      int64(cfg.StoreMaxRows),
 		BatchSize:    int64(cfg.StoreSweepBatchSize),
+		Pause:        time.Duration(cfg.StoreSweepPauseMillis) * time.Millisecond,
 	}
-	log.Printf("🧹 retention sweeper enabled: interval=%s completedTTL=%s failedTTL=%s maxRows=%d batch=%d timeout=%ds",
+	log.Printf("🧹 retention sweeper enabled: interval=%s completedTTL=%s failedTTL=%s maxRows=%d batch=%d pause=%s timeout=%ds",
 		interval, retention.CompletedTTL, retention.FailedTTL, retention.MaxRows,
-		retention.BatchSize, cfg.StoreSweepTimeoutSeconds)
+		retention.BatchSize, retention.Pause, cfg.StoreSweepTimeoutSeconds)
 
 	sweep := func() {
 		sctx := ctx

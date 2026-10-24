@@ -77,6 +77,8 @@ env:
     # many small transactions instead of one oversized DELETE that can exceed
     # the sweep deadline and roll back.
     sweepBatch: 2000
+    # Pause between DELETE batches to admit ingestion; negative disables pacing.
+    sweepPauseMillis: 25
     # Per-sweep deadline in seconds. 0 means no artificial deadline: the sweep
     # drains the eligible backlog in batches, cancelling only on shutdown.
     sweepTimeoutSeconds: 0
@@ -129,4 +131,3 @@ readinessProbe:
   periodSeconds: 10
   timeoutSeconds: 5
   failureThreshold: 3
-

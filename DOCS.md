@@ -112,6 +112,7 @@ Environment variables:
 - `STORE_FAILED_TTL_HOURS` (default `336`) - retention for failed history (14 days); `0` disables
 - `STORE_SWEEP_SECONDS` (default `300`) - interval between retention sweeps
 - `STORE_SWEEP_BATCH` (default `2000`) - rows deleted per sweep statement; small batches keep each DELETE (and its per-row FTS5 trigger work) fast so a large backlog drains across many small transactions instead of one oversized DELETE
+- `STORE_SWEEP_PAUSE_MILLIS` (default `25`) - cancellation-aware pause between full DELETE batches; `0` uses the default, negative disables pacing
 - `STORE_SWEEP_TIMEOUT_SECONDS` (default `0`) - optional per-sweep deadline; `0` means no artificial deadline (the sweep drains the eligible backlog in batches, cancelling only on shutdown)
 - `STORE_MAX_ROWS` (default `0`) - optional hard cap on total history rows; `0` disables
 - `STORE_READ_CONCURRENCY` (default `16`) - max concurrent search/detail reads; excess gets `503`
@@ -126,6 +127,79 @@ workload collector are written to the embedded SQLite history store by a
 background writer, and a sweeper ages them out per the `STORE_*_TTL_HOURS`
 settings (failures are kept longer than successes). Search and job-detail reads
 are served from SQLite, never from live Redis.
+
+#### History write reliability and diagnosis
+
+The background writer and retention DELETEs share cancellation-aware, in-process
+write admission. Admission is released after every DELETE batch, including a
+failed attempt; the sweeper pauses between full batches to let ingestion progress.
+WAL readers still use separate connections. SQLite `BUSY`/`LOCKED` errors
+(including extended codes) retry the **same** transaction batch with exponential
+backoff from 10ms to a 250ms cap, until success or cancellation. Other errors are
+not retried: the lost record count is logged and counted. Shutdown retries an
+interrupted batch and drains the channel snapshot using one shared five-second
+deadline, not five seconds per batch. A SQLite busy wait or in-flight statement
+can delay cancellation; the existing driver busy timeout remains five seconds.
+New enqueues after the shutdown snapshot are rejected, logged and counted as
+lost, rather than accepted into a channel that no longer has a writer.
+This is best-effort async persistence, not a durable queue: full-channel drops,
+permanent errors, exhausted shutdown drains, and process crashes can lose history.
+Collector cursors are still in-memory and default to `$` after restart.
+
+On an existing database, startup builds expression indexes over the effective
+end time (`finished_at` when positive, otherwise `created_at`): one global index
+and separate failed/non-failed partial indexes. The one-time build reads retained
+rows, requires disk space, and can delay startup; allow for this during rollout
+without assuming a fixed duration. No record backfill or FTS rebuild is performed.
+The obsolete `(state, finished_at, created_at)` sweep index is then removed; the
+other search indexes remain. TTL DELETEs explicitly select their tier's range
+index so competing state indexes cannot turn them back into retained-row scans.
+Search ordering, zero-finished fallback, disabled TTL tiers and the optional
+newest-first hard cap are unchanged; arbitrary search filters may still sort.
+
+The **Collector & Service Internals** Grafana dashboard includes history panels:
+
+| Signal | Interpretation / action |
+|--------|-------------------------|
+| `bullderdash_store_queue_depth` / `bullderdash_store_queue_capacity` | Channel backlog, excluding the in-flight batch; updated on enqueue/dequeue even while writes are blocked. Sustained growth means persistence is not keeping up. A larger buffer absorbs bursts, not sustained overload. |
+| `bullderdash_store_write_lock_wait_seconds` (`operation`: `ingest` or `sweep`) | In-process admission wait per attempt, including cancelled waits; not SQLite execution time. High ingest wait with long DELETEs suggests trying a smaller sweep batch or more pacing. |
+| `bullderdash_store_sweep_batch_duration_seconds` | Each SQLite DELETE attempt, including pool/SQLite busy wait and FTS trigger/commit work, on success **or error**. Excludes in-process admission and pacing. High values with low admission wait point to pool/SQLite/storage/FTS cost. |
+| `bullderdash_store_sweep_duration_seconds` | Whole sweep on success or error, including admission, retries and pauses. Compare deleted-row rate with ingest, not just sweep wall time. |
+| `bullderdash_store_write_retries_total` (`operation`: `ingest` or `sweep`) | Typed SQLite contention retries. Persistent growth can indicate another writer/maintenance process; distinguish this from internal admission wait. |
+| `bullderdash_store_write_lost_records_total` | Records discarded on write error, exhausted shutdown drain or enqueue after shutdown. Check the accompanying `lost_records` error logs; separate from full-channel `bullderdash_store_writes_dropped_total`. |
+| `bullderdash_store_write_batch_duration_seconds` | Ingest batch duration from write admission through the final attempt, including retries and failures but excluding channel/batch-formation wait (previous versions observed only successful batches). `write_errors_total` counts finally discarded batches, not retry attempts. |
+
+The operation labels have only `ingest` and `sweep` values. No job IDs, queues or
+payloads are added to these labels or error logs. These signals identify where
+time is spent; a full-channel-drop alert alone does **not** identify the sweeper
+as the cause.
+
+Local regression workload (temporary databases only):
+`go test ./internal/store -run TestHistoryReliabilitySoak -count=1 -v` with
+`STORE_RELIABILITY_SOAK=1` compares 10k/100k mixed retained rows, ~1.2KiB indexed
+payloads, ~74 records/s plus a 2048-record burst, a concurrent expiry backlog,
+and an external writer lock. `go test ./internal/store -run '^$' -bench
+BenchmarkRetentionRangeSeek -benchtime=1s` compares no-expiry sweep cost at
+those retained sizes. These are bounded local checks, not production storage
+benchmarks or a guarantee at multi-million-row retention.
+
+An example local run (Windows/amd64, Ryzen 7 PRO 7840U, synthetic common-token
+payloads, warm local storage) measured the following. The soak used a 16,384-record
+channel, 512-record write batches, 500ms flush, **100-row sweep batches** with
+25ms pacing, a 4,000-row expired backlog, and a 200ms external writer transaction.
+The default sweep batch remains 2,000; smaller test batches deliberately exercise
+interleaving.
+
+| Retained rows (90% completed / 10% failed) | Offered / persisted in ~5s (74/s + burst) | Drops / error losses | Sampled peak channel depth | No-expiry sweep benchmark |
+|-----------------------------------------|------------------------------------------|----------------------|----------------------------|---------------------------|
+| 10,000 | 2,418 / 2,418 | 0 / 0 | 1,572 | 105.6us/op |
+| 100,000 | 2,418 / 2,418 | 0 / 0 | 1,595 | 114.8us/op |
+
+Both TTL plans range-seek their own partial expression index with all legacy
+competing indexes present. FTS integrity checks passed after migration, upsert
+and deletion. This does not measure managed-csi latency, cold-cache behavior,
+production payload entropy, million-row startup index builds or long-running
+WAL/checkpoint pressure; none of those should be inferred from these numbers.
 
 #### Storage sizing and the FTS index
 
@@ -156,9 +230,11 @@ This has two consequences worth planning for:
   in bounded batches (`STORE_SWEEP_BATCH`, default 2000 rows per statement) and
   loops until the eligible backlog is drained, so one sweep can clear far more
   than a single batch. If sustained throughput outruns the sweeper (resident
-  rows and file size keep climbing past one `completed_TTL`), shorten
-  `STORE_SWEEP_SECONDS` so sweeps run more often and/or raise `STORE_SWEEP_BATCH`
-  so each sweep clears more per statement. Watch `bullderdash_store_sweep_deleted_total`:
+  rows and file size keep climbing past one `completed_TTL`), use the history
+  metrics above to distinguish infrequent sweeps, write admission pressure and
+  slow SQLite work. Shorten `STORE_SWEEP_SECONDS` for infrequent sweeps; tune
+  batch size and pacing together rather than blindly raising the batch size
+  (which can starve ingestion). Watch `bullderdash_store_sweep_deleted_total`:
   it should keep climbing in step with `bullderdash_store_writes_total`.
 
 Sizing guidance:

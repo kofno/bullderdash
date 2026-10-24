@@ -13,7 +13,7 @@ it. The workload dashboards light up when `WORKLOAD_METRICS_ENABLED=true`.
 |------|-----|---------------|
 | `dashboards/queue-health.json` | `bdd-queue-health` | Fleet summary stats, per-queue backlog (waiting / active / delayed / prioritized / waiting-children), failure & stall watch, and an instant state-breakdown table. Driven by the `bullmq_queue_*` gauges. |
 | `dashboards/workload-throughput.json` | `bdd-workload` | Completed vs failed throughput, failure ratio, p50/p95/p99 completion latency + a duration heatmap, per-job-name breakdown, and event lag. Driven by the event-stream `bullmq_jobs_finished_total` / `bullmq_job_completion_duration_seconds` series. |
-| `dashboards/collector-internals.json` | `bdd-internals` | Collector health (events read/dropped, lookup errors, event lag), Redis op latency/errors, HTTP rate/latency, and process memory/goroutines/CPU. |
+| `dashboards/collector-internals.json` | `bdd-internals` | Collector health, history channel pressure/loss/retries, ingest/admission/sweep timing, Redis op latency/errors, HTTP rate/latency, and process memory/goroutines/CPU. History panels require `STORE_ENABLED=true` and the reliability metrics build; see `DOCS.md` for interpretation. |
 
 All three expose a **`datasource`** variable (pick any Prometheus) and a
 **`queue`** filter; the workload board adds a **`name`** (job-name) filter.

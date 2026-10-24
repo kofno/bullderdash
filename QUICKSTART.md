@@ -172,6 +172,7 @@ export STORE_COMPLETED_TTL_HOURS=24
 export STORE_FAILED_TTL_HOURS=336
 export STORE_SWEEP_SECONDS=300
 export STORE_SWEEP_BATCH=2000
+export STORE_SWEEP_PAUSE_MILLIS=25
 export STORE_READ_CONCURRENCY=16
 ```
 
@@ -246,4 +247,3 @@ Check these files:
 - `.env.example` - Configuration examples
 
 Happy monitoring! 🎉
-

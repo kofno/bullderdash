@@ -296,8 +296,8 @@ Main Goroutine
   │     ▼
   ├─> Store writer (STORE_ENABLED) — single goroutine, batched upserts
   │
-  ├─> Retention sweeper (STORE_SWEEP_SECONDS) — batched DELETEs that
-  │     contend with the writer for SQLite's single write lock
+  ├─> Retention sweeper (STORE_SWEEP_SECONDS) — tier-indexed DELETEs,
+  │     per-batch write admission shared with ingestion, paced between batches
   │
   └─> Signal handling: SIGINT/SIGTERM → stop pollers, drain writer,
         close SQLite, then graceful HTTP shutdown
@@ -394,5 +394,4 @@ single replica (one RWO PVC + `Recreate` strategy); scale vertically instead.
 1. **Redis connection limit** - Use connection pooling (already implemented)
 2. **Job list size** - Job lists are paged (bounded range per request)
 3. **Metrics cardinality** - Workload metrics cap job-name labels per queue (`WORKLOAD_METRICS_MAX_JOB_NAMES_PER_QUEUE`)
-4. **SQLite single writer** - History persistence is single-replica; the writer and the retention sweeper share one write lock, and the writer drops records (`bullderdash_store_writes_dropped_total`) when `STORE_WRITE_BUFFER` fills. Bound read concurrency with `STORE_READ_CONCURRENCY`
-
+4. **SQLite single writer** - History persistence is single-replica; the writer and retention sweeper serialize mutations with cancellation-aware admission, released after each DELETE batch. SQLite contention retries retain the same batch; permanent/shutdown losses are logged and counted separately from full-channel drops. The writer still drops records (`bullderdash_store_writes_dropped_total`) when `STORE_WRITE_BUFFER` fills. Bound read concurrency with `STORE_READ_CONCURRENCY`; see `DOCS.md` for migration/startup cost and diagnosis.

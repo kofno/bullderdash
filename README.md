@@ -102,6 +102,7 @@ export STORE_COMPLETED_TTL_HOURS=24
 export STORE_FAILED_TTL_HOURS=336
 export STORE_SWEEP_SECONDS=300
 export STORE_SWEEP_BATCH=2000
+export STORE_SWEEP_PAUSE_MILLIS=25
 export STORE_SWEEP_TIMEOUT_SECONDS=0
 export STORE_MAX_ROWS=0
 export STORE_READ_CONCURRENCY=16
@@ -171,6 +172,7 @@ All configuration is done via environment variables:
 | `STORE_FAILED_TTL_HOURS` | `336` | Retention for failed history (default 14 days); `0` disables this tier |
 | `STORE_SWEEP_SECONDS` | `300` | Interval between retention sweeps |
 | `STORE_SWEEP_BATCH` | `2000` | Rows deleted per sweep statement; the sweep loops in batches until the eligible backlog is drained |
+| `STORE_SWEEP_PAUSE_MILLIS` | `25` | Cancellation-aware pause between full sweep batches to admit ingestion; `0` uses the default, negative disables pacing |
 | `STORE_SWEEP_TIMEOUT_SECONDS` | `0` | Optional per-sweep deadline; `0` means no artificial deadline |
 | `STORE_MAX_ROWS` | `0` | Optional hard cap on total history rows (newest kept); `0` disables the cap |
 | `STORE_READ_CONCURRENCY` | `16` | Max concurrent search/detail reads; excess requests get HTTP 503 |

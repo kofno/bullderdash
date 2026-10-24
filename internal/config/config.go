@@ -27,20 +27,21 @@ type Config struct {
 	WorkloadMetricsMaxJobNames     int
 	WorkloadMetricsStartID         string
 	// Store (SQLite job history) configuration
-	StoreEnabled           bool
-	StoreDBPath            string
-	StoreWriteBuffer       int
-	StoreBatchSize         int
-	StoreFlushMillis       int
-	StoreTraceKeys         []string
+	StoreEnabled             bool
+	StoreDBPath              string
+	StoreWriteBuffer         int
+	StoreBatchSize           int
+	StoreFlushMillis         int
+	StoreTraceKeys           []string
 	StoreCompletedTTLHours   int
 	StoreFailedTTLHours      int
 	StoreSweepSeconds        int
 	StoreSweepBatchSize      int
+	StoreSweepPauseMillis    int
 	StoreSweepTimeoutSeconds int
 	StoreMaxRows             int
 	StoreReadConcurrency     int
-	LogLevel               string
+	LogLevel                 string
 }
 
 // Load reads configuration from environment variables with sensible defaults
@@ -74,6 +75,7 @@ func Load() *Config {
 		StoreFailedTTLHours:            getEnvInt("STORE_FAILED_TTL_HOURS", 336),
 		StoreSweepSeconds:              getEnvInt("STORE_SWEEP_SECONDS", 300),
 		StoreSweepBatchSize:            getEnvInt("STORE_SWEEP_BATCH", 2000),
+		StoreSweepPauseMillis:          getEnvInt("STORE_SWEEP_PAUSE_MILLIS", 25),
 		StoreSweepTimeoutSeconds:       getEnvInt("STORE_SWEEP_TIMEOUT_SECONDS", 0),
 		StoreMaxRows:                   getEnvInt("STORE_MAX_ROWS", 0),
 		StoreReadConcurrency:           getEnvInt("STORE_READ_CONCURRENCY", 16),
