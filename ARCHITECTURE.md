@@ -13,7 +13,7 @@
               ▼                   ▼                   ▼
     ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
     │   Web Routes    │  │  Metrics API    │  │  Health Checks  │
-    │ (HTMX UI +      │  │  (Prometheus)   │  │  (K8s Probes)   │
+    │ (Anvil UI +     │  │  (Prometheus)   │  │  (K8s Probes)   │
     │  Search Console)│  │                 │  │                 │
     └─────────────────┘  └─────────────────┘  └─────────────────┘
               │                   │                   │
@@ -53,9 +53,12 @@
                     └──────────────────────────┘
 ```
 
-### History & Search Path (when `STORE_ENABLED=true`)
+### History & Search Path (when `STORE_ENABLED=true` and `WORKLOAD_METRICS_ENABLED=true`)
 
-Search is decoupled from the live Redis path. A background collector tails the
+Search is decoupled from the live Redis path. The history store is fed only by
+the workload collector, so `STORE_ENABLED=true` without
+`WORKLOAD_METRICS_ENABLED=true` does not ingest new history (existing records remain
+searchable until retention removes them). A background collector tails the
 BullMQ event streams and hands terminal (completed/failed) jobs to a background
 writer that persists them to an embedded SQLite database. The search console and
 JSON search API read exclusively from SQLite, so search never scans live Redis.
@@ -65,7 +68,10 @@ Redis BullMQ event streams
    │  (background tail)
    ▼
 Workloadmetrics Collector ──> Prometheus metrics (in-memory)
-   │  terminal jobs
+   │  terminal jobs (HGETALL + flow-lineage lookup per job)
+   ▼
+Bounded channel (STORE_WRITE_BUFFER; non-blocking, drops when full)
+   │
    ▼
 Store Writer (batched) ──> Embedded SQLite (WAL) ──> FTS5 full-text index
                                    ▲                        │
@@ -77,49 +83,46 @@ Store Writer (batched) ──> Embedded SQLite (WAL) ──> FTS5 full-text inde
 
 ### Dashboard Request
 ```
+Background poller (main.go, every METRICS_POLL_SECONDS)
+   │ RefreshDashboardCache()
+   │   explorer.DiscoverQueues()  (SCAN bull:*:id)
+   │   explorer.GetQueueStats()   (LLEN / ZCARD only)
+   │   Updates Prometheus queue gauges
+   ▼
+DashboardCache (in-memory snapshot)
+
 Browser
    │ GET /
    ▼
-Main Handler (main.go)
-   │ Returns HTML with HTMX
+HomeHandler (web/handlers.go)
+   │ Returns the Anvil app shell; the queue list container
+   │ carries data-poll-url="/queues"
    ▼
-Browser (HTMX)
+Browser (assets/app.js poller)
    │ GET /queues (every 5s)
    ▼
 DashboardHandler (web/handlers.go)
-   │ Calls explorer.DiscoverQueues()
-   │ Calls explorer.GetQueueStats()
+   │ Renders the cached snapshot (no Redis calls on the hot path;
+   │ only refreshes synchronously if no snapshot exists yet)
    ▼
-Explorer (explorer/explorer.go)
-   │ Redis SCAN for bull:*:id
-   │ Redis commands (LLEN, ZCARD)
-   │ Updates Prometheus metrics
-   ▼
-HTML Table Response
-   │ Rendered via template
-   ▼
-Browser (HTMX swaps content)
+HTML fragment ──> app.js swaps it into the page
 ```
 
 ### Job List Request
 ```
 Browser
    │ Click on "5 Failed" link
-   │ GET /queue/jobs?queue=email&state=failed
+   │ GET /queue/jobs?queue=email&state=failed&page=1
    ▼
 JobListHandler (web/handlers.go)
-   │ Calls explorer.GetJobsByState()
+   │ Calls explorer.GetJobsByStatePage() (100/page)
+   │ or GetJobsAcrossStatesPage() for state=all (50/page per state)
    ▼
 Explorer (explorer/explorer.go)
-   │ Redis ZRANGE bull:email:failed
-   │ For each jobID:
-   │   Redis HGETALL bull:email:{jobId}
-   │   Parse JSON fields
+   │ Bounded LRANGE / ZRANGE window for the requested page
+   │ Per-job hash lookups for that page only
    ▼
-HTML Table Response
-   │ Job list with details
-   ▼
-Browser displays job list
+HTML Response (paged job list)
 ```
 
 ### Job Detail Request
@@ -142,7 +145,7 @@ Explorer (explorer/explorer.go)
 JSON Response
    │ Complete job object
    ▼
-Browser displays JSON (or future HTML template)
+Browser displays JSON
 ```
 
 ### Metrics Request
@@ -235,11 +238,12 @@ main.go
   │     ├─> metrics/metrics.go (Prometheus)
   │     └─> store/store.go (persist terminal jobs)
   ├─> store/store.go (embedded SQLite history + FTS5; writer + sweeper)
-  ├─> web/handlers.go (HTTP handlers)
+  ├─> web/handlers.go (HTTP handlers + dashboard snapshot cache)
   │     ├─> explorer/explorer.go
   │     └─> metrics/metrics.go
-  ├─> web/console.go (embedded search console + /v1 search API)
-  │     └─> store/store.go (read-only search/detail)
+  ├─> web/assets.go (embedded app.css / app.js design system, /assets/)
+  ├─> web/console.go + web/searchapi.go (embedded console + /v1 JSON API)
+  │     └─> store/store.go (read-only search/detail/stats)
   └─> prometheus/promhttp (metrics endpoint)
 ```
 
@@ -251,11 +255,15 @@ Environment Variables          Config Loader              Application
 │ REDIS_ADDR      │   ─────> │ config.Load()│   ─────> │ Redis Client│
 │ REDIS_PASSWORD  │          │              │          │ HTTP Server │
 │ REDIS_DB        │          │ • getEnv()   │          │ Explorer    │
-│ SERVER_PORT     │          │ • getEnvInt()│          └─────────────┘
-│ QUEUE_PREFIX    │          │ • Defaults   │
+│ SERVER_PORT     │          │ • getEnvInt()│          │ Collector   │
+│ QUEUE_PREFIX    │          │ • getEnvBool │          │ Store       │
+│ WORKLOAD_*      │          │ • getEnvList │          └─────────────┘
+│ STORE_*         │          │ • Defaults   │
 │ LOG_LEVEL       │          └──────────────┘
 └─────────────────┘
 ```
+
+See `DOCS.md` for the full list of variables and defaults.
 
 ## Redis Connectivity Modes
 
@@ -277,15 +285,22 @@ Bull-der-dash supports two connection modes:
 Main Goroutine
   │
   ├─> HTTP Server Goroutine
-  │     │
-  │     ├─> Request Handler 1 (goroutine per request)
-  │     ├─> Request Handler 2
-  │     ├─> Request Handler 3
-  │     └─> ...
+  │     ├─> Request Handler (goroutine per request)
+  │     └─> /v1 reads bounded by STORE_READ_CONCURRENCY (excess → 503)
   │
-  └─> Signal Handler Goroutine
-        │ Waits for SIGINT/SIGTERM
-        └─> Triggers graceful shutdown
+  ├─> Dashboard snapshot poller (METRICS_POLL_SECONDS)
+  │
+  ├─> Workload collector (WORKLOAD_METRICS_ENABLED)
+  │     │ Single loop: XREAD all queue event streams, then per terminal
+  │     │ event HGETALL + lineage lookup, then non-blocking Enqueue
+  │     ▼
+  ├─> Store writer (STORE_ENABLED) — single goroutine, batched upserts
+  │
+  ├─> Retention sweeper (STORE_SWEEP_SECONDS) — batched DELETEs that
+  │     contend with the writer for SQLite's single write lock
+  │
+  └─> Signal handling: SIGINT/SIGTERM → stop pollers, drain writer,
+        close SQLite, then graceful HTTP shutdown
 ```
 
 ## Error Handling Strategy
@@ -336,7 +351,7 @@ persistence disabled (or with a future shared/external store).
 
 | Operation | Latency | Notes |
 |-----------|---------|-------|
-| Queue discovery | ~10-20ms | SCAN command, cached in Redis |
+| Queue discovery | ~10-20ms | SCAN command, run by the background poller |
 | Queue stats | ~5-10ms | Multiple Redis commands |
 | Job retrieval | ~2-5ms | Single HGETALL |
 | Job list (100) | ~50-100ms | Multiple HGETALL calls |
@@ -377,8 +392,7 @@ single replica (one RWO PVC + `Recreate` strategy); scale vertically instead.
 
 ### Bottlenecks
 1. **Redis connection limit** - Use connection pooling (already implemented)
-2. **Job list size** - Paginate for large queues (TODO)
-3. **Metrics cardinality** - Queue name is only label (safe)
-4. **SQLite single writer** - History persistence is single-replica; bound read concurrency with `STORE_READ_CONCURRENCY`
-
+2. **Job list size** - Job lists are paged (bounded range per request)
+3. **Metrics cardinality** - Workload metrics cap job-name labels per queue (`WORKLOAD_METRICS_MAX_JOB_NAMES_PER_QUEUE`)
+4. **SQLite single writer** - History persistence is single-replica; the writer and the retention sweeper share one write lock, and the writer drops records (`bullderdash_store_writes_dropped_total`) when `STORE_WRITE_BUFFER` fills. Bound read concurrency with `STORE_READ_CONCURRENCY`
 

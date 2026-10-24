@@ -3,7 +3,7 @@
 Foundational mandates for Gemini CLI in the `bull-der-dash` repository.
 
 ## Project Context
-`bull-der-dash` is a high-performance dashboard for monitoring BullMQ queues, built with Go and Prometheus. It is designed for Kubernetes-native deployments, production safety, and low overhead under large retained-job counts. The live dashboard is HTMX-driven, while the newer full-text search console (`/console`) is a dependency-free vanilla-JS page backed by an embedded SQLite history store; HTMX is being phased out in favor of the console.
+`bull-der-dash` is a high-performance dashboard for monitoring BullMQ queues, built with Go and Prometheus. It is designed for Kubernetes-native deployments, production safety, and low overhead under large retained-job counts. The live dashboard and the full-text search console (`/console`) share one dependency-free "Anvil" dark UI (vanilla JS + CSS embedded via `go:embed`); HTMX and Tailwind have been removed. The console is backed by an embedded SQLite history store.
 
 ## Core Mandates
 
@@ -27,8 +27,8 @@ Foundational mandates for Gemini CLI in the `bull-der-dash` repository.
   - Full-text search is served from SQLite FTS5 via `/console` and `/v1/search`; it must not fall back to scanning live Redis.
   - SQLite is a single writer: the deployment runs a single replica with a `ReadWriteOnce` volume and the `Recreate` update strategy.
 - **Frontend**:
-  - The live dashboard uses **HTMX** with **Tailwind CSS** classes directly in templates.
-  - The search console is dependency-free vanilla JS embedded via `go:embed`; prefer the console for new UI work and avoid adding new HTMX/CDN dependencies.
+  - All pages use the shared Anvil design system (`internal/web/assets/app.css`, `app.js`) embedded via `go:embed`; live pages poll HTML fragments with `data-poll-url`.
+  - Keep the UI framework-free: do not add htmx, Tailwind, or CDN dependencies.
 - **CLI Helper**: The `cmd/redis-cli` tool is a lightweight helper for Redis operations; keep it focused on diagnostics.
 
 ### Performance Rules
@@ -37,7 +37,7 @@ Foundational mandates for Gemini CLI in the `bull-der-dash` repository.
   - Prefer `LLEN`, `ZCARD`, and other cheap cardinality operations for live counts.
   - Expensive diagnostics such as orphaned-job detection should not run on the dashboard polling path.
 - **Polling is allowed**:
-  - Preserve live HTMX polling where it adds value.
+  - Preserve live polling where it adds value.
   - Make polled endpoints serve cached snapshots or similarly cheap summaries.
 - **Diagnostics are separate**:
   - Deep scans, orphaned detection, and other expensive correctness checks belong in admin/diagnostic flows or background work.
@@ -76,6 +76,6 @@ Foundational mandates for Gemini CLI in the `bull-der-dash` repository.
 - **Backend**: Go 1.26+
 - **Live Data**: Redis / Valkey (via `go-redis/v9`)
 - **History & Search**: Embedded SQLite with FTS5 (`modernc.org/sqlite`, pure-Go, CGO-free)
-- **Frontend**: HTMX + Tailwind CSS (live dashboard); dependency-free vanilla JS (search console)
+- **Frontend**: Dependency-free vanilla JS + CSS ("Anvil" design system), embedded via `go:embed`
 - **Observability**: Prometheus
 - **Environment**: Kubernetes (kinD for local dev)

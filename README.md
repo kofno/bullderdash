@@ -101,6 +101,8 @@ export STORE_TRACE_KEYS=
 export STORE_COMPLETED_TTL_HOURS=24
 export STORE_FAILED_TTL_HOURS=336
 export STORE_SWEEP_SECONDS=300
+export STORE_SWEEP_BATCH=2000
+export STORE_SWEEP_TIMEOUT_SECONDS=0
 export STORE_MAX_ROWS=0
 export STORE_READ_CONCURRENCY=16
 export LOG_LEVEL=info
@@ -159,7 +161,7 @@ All configuration is done via environment variables:
 | `WORKLOAD_METRICS_BATCH_SIZE` | `100` | Maximum BullMQ event stream entries read per `XREAD` call |
 | `WORKLOAD_METRICS_MAX_JOB_NAMES_PER_QUEUE` | `100` | Per-queue job-name label cardinality cap; additional names use `__other__` |
 | `WORKLOAD_METRICS_START_ID` | `$` | Initial BullMQ event stream ID; `$` starts with new events only |
-| `STORE_ENABLED` | `false` | Persist completed/failed jobs to the embedded SQLite history store (powers `/console` search) |
+| `STORE_ENABLED` | `false` | Persist completed/failed jobs to the embedded SQLite history store (powers `/console` search); requires `WORKLOAD_METRICS_ENABLED=true` |
 | `STORE_DB_PATH` | `/data/history.db` | Path to the SQLite database file; its directory must be writable (mount a volume) |
 | `STORE_WRITE_BUFFER` | `4096` | Size of the in-memory write channel; records are dropped (and counted) when full |
 | `STORE_BATCH_SIZE` | `256` | Max records flushed per write transaction |
@@ -168,6 +170,8 @@ All configuration is done via environment variables:
 | `STORE_COMPLETED_TTL_HOURS` | `24` | Retention for non-failed history; `0` disables this tier |
 | `STORE_FAILED_TTL_HOURS` | `336` | Retention for failed history (default 14 days); `0` disables this tier |
 | `STORE_SWEEP_SECONDS` | `300` | Interval between retention sweeps |
+| `STORE_SWEEP_BATCH` | `2000` | Rows deleted per sweep statement; the sweep loops in batches until the eligible backlog is drained |
+| `STORE_SWEEP_TIMEOUT_SECONDS` | `0` | Optional per-sweep deadline; `0` means no artificial deadline |
 | `STORE_MAX_ROWS` | `0` | Optional hard cap on total history rows (newest kept); `0` disables the cap |
 | `STORE_READ_CONCURRENCY` | `16` | Max concurrent search/detail reads; excess requests get HTTP 503 |
 | `LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
