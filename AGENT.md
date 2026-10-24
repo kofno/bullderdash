@@ -4,7 +4,7 @@ This file gives coding agents the minimum context needed to work effectively in 
 
 ## What This Project Is
 `bull-der-dash` is a Go web app for monitoring BullMQ queues in Redis/Valkey. It serves:
-- a live HTMX dashboard
+- a live dashboard (framework-free; vanilla-JS polling of HTML fragments)
 - queue and job inspection pages
 - a full-text search console (`/console`) backed by an embedded SQLite history store
 - Prometheus metrics
@@ -24,7 +24,7 @@ The project is optimized for production use, including environments with large B
 - `scripts/sim`: Bun simulator for BullMQ load and state coverage
 
 ## Current Performance Model
-- The dashboard is intentionally live and polled via HTMX.
+- The dashboard is intentionally live: pages poll same-origin HTML fragments via `internal/web/assets/app.js` (`data-poll-url`). Do not reintroduce htmx, Tailwind, or CDN assets.
 - Frequently polled views must stay cheap.
 - `/queues` should serve from an in-memory snapshot refreshed in the background.
 - Fast queue stats should use cheap Redis count operations like `LLEN` and `ZCARD`.

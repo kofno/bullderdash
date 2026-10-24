@@ -23,7 +23,7 @@
 
 ### Search Console
 - URL: `http://localhost:8080/console`
-- Available when `STORE_ENABLED=true`
+- Available when `STORE_ENABLED=true` (populated only when `WORKLOAD_METRICS_ENABLED=true`)
 - Full-text search over persisted job history (name, trace id, last error, payloads)
 - Filter by queue, job name, state, trace id, and time window
 - Drill down into a trace's lineage and open full single-job detail
@@ -32,15 +32,19 @@
 ## Endpoints
 
 - `GET /` - Dashboard
-- `GET /queues` - HTMX queue list fragment
+- `GET /assets/` - Embedded shared CSS/JS (Anvil design system)
+- `GET /queues` - Polled HTML fragment: queue list (served from the background snapshot)
 - `GET /queue/<name>` - Queue detail view
-- `GET /queue/jobs?queue=<name>&state=<state>` - State job list
+- `GET /queue/summary?queue=<name>` - Polled HTML fragment: single-queue summary
+- `GET /queue/jobs?queue=<name>&state=<state>&page=<n>` - Paged state job list (`state=all` for every state)
 - `GET /job/detail?queue=<name>&id=<id>` - Job detail (JSON)
+- `GET /search` - Deprecated; redirects to `/console` (or `/` when the store is disabled)
 - `GET /console` - Full-text search console (when `STORE_ENABLED=true`)
-- `GET /v1/search?q=&name=&state=&trace_id=&since_ms=&limit=` - Search persisted history (JSON; requires at least one of `q`/`name`/`state`/`trace_id`, else `400`; `503` when readers are saturated)
+- `GET /v1/search?q=&name=&state=&trace_id=&errored=&since_ms=&limit=` - Search persisted history (JSON; requires at least one of `q`/`name`/`state`/`trace_id`/`errored`/`since_ms`, else `400`; `503` when readers are saturated)
 - `GET /v1/jobs/{id}` - Persisted detail for one job (JSON; `404` once it has aged out of retention)
+- `GET /v1/stats/job-names?queue=&state=&since_ms=&limit=` - Exact top job names from history (JSON)
 - `GET /metrics` - Prometheus metrics
-- `GET /health` and `GET /ready` - Health checks
+- `GET /health`, `/healthz`, `/ready`, `/readyz` - Health checks
 
 ## Metrics
 
@@ -69,6 +73,14 @@ Workload metrics, when `WORKLOAD_METRICS_ENABLED=true`:
 - `bullmq_workload_events_dropped_total{queue,reason}` - Terminal events skipped because the event itself was missing required fields
 - `bullmq_workload_job_lookup_errors_total{queue,reason}` - Job hash lookup or parsing failures
 
+History store metrics, when `STORE_ENABLED=true`:
+- `bullderdash_store_writes_total` - Records persisted to SQLite
+- `bullderdash_store_writes_dropped_total` - Records dropped because the `STORE_WRITE_BUFFER` channel was full (history gaps)
+- `bullderdash_store_write_errors_total` - Failed write batches (every record in the batch is lost, e.g. when a batch times out waiting for the write lock)
+- `bullderdash_store_write_batch_duration_seconds` - Write-batch latency
+- `bullderdash_store_query_duration_seconds{operation}` - Initial query-call latency (`search`, `get`, `stats_job_names`); does not include reading all results
+- `bullderdash_store_sweep_deleted_total` - Rows removed by the retention sweeper
+
 ## Configuration
 
 Environment variables:
@@ -90,7 +102,7 @@ Environment variables:
 - `WORKLOAD_METRICS_BATCH_SIZE` (default `100`)
 - `WORKLOAD_METRICS_MAX_JOB_NAMES_PER_QUEUE` (default `100`)
 - `WORKLOAD_METRICS_START_ID` (default `$`)
-- `STORE_ENABLED` (default `false`) - persist completed/failed jobs to SQLite and enable `/console`
+- `STORE_ENABLED` (default `false`) - persist completed/failed jobs to SQLite and enable `/console`; requires `WORKLOAD_METRICS_ENABLED=true`, since the workload collector is what feeds the store
 - `STORE_DB_PATH` (default `/data/history.db`) - SQLite file path; its directory must be writable
 - `STORE_WRITE_BUFFER` (default `4096`) - in-memory write channel size; records drop when full
 - `STORE_BATCH_SIZE` (default `256`) - max records per write transaction

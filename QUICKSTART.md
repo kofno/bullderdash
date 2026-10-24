@@ -164,12 +164,14 @@ export METRICS_POLL_SECONDS=10
 export DASHBOARD_REFRESH_TIMEOUT_SECONDS=30
 export LOG_LEVEL=info
 
-# Job history + search console (optional)
+# Job history + search console (optional; requires the workload collector)
+export WORKLOAD_METRICS_ENABLED=true
 export STORE_ENABLED=false
 export STORE_DB_PATH=/data/history.db
 export STORE_COMPLETED_TTL_HOURS=24
 export STORE_FAILED_TTL_HOURS=336
 export STORE_SWEEP_SECONDS=300
+export STORE_SWEEP_BATCH=2000
 export STORE_READ_CONCURRENCY=16
 ```
 
@@ -221,6 +223,7 @@ helm install bull-der-dash oci://ghcr.io/kofno/charts/bull-der-dash \
   --version 0.2.0 \
   --namespace bull-der-dash --create-namespace \
   --set image.repository=ghcr.io/kofno/bull-der-dash \
+  --set env.workloadMetrics.enabled=true \
   --set env.store.enabled=true \
   --set persistence.enabled=true \
   --set persistence.size=5Gi
@@ -231,7 +234,7 @@ helm install bull-der-dash oci://ghcr.io/kofno/charts/bull-der-dash \
 1. ✅ Verify you see your queues
 2. 📊 Set up Prometheus scraping (if using)
 3. 🔍 Enable the history store (`STORE_ENABLED=true`) and explore `/console` search
-4. 🎨 Customize the UI (Tailwind classes in handlers.go; console in `internal/web/assets/console.html`)
+4. 🎨 Customize the UI (templates in `internal/web/handlers.go`, shared styles in `internal/web/assets/app.css`, console in `internal/web/assets/console.html`)
 5. 🚀 Add more features!
 
 ## Need Help?
