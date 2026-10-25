@@ -173,6 +173,18 @@ var (
 	)
 
 	// Store (SQLite job history) metrics
+	HistoryEnqueueWait = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name: "bullderdash_history_enqueue_wait_seconds", Help: "Time waiting to admit a history item, including cancelled waits", Buckets: prometheus.DefBuckets,
+	})
+	HistoryLag = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "bullderdash_history_ingest_lag_seconds", Help: "Age of committed history cursor while behind the observed stream tail; zero when caught up",
+	}, []string{"queue"})
+	HistoryGaps = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "bullderdash_history_gaps_total", Help: "Distinct detected ranges of unavailable Redis stream events; not an exact lost-job count",
+	}, []string{"queue"})
+	HistoryPartial = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "bullderdash_history_partial_records_total", Help: "Missing-hash terminal observations admitted as partial history, including replay attempts",
+	}, []string{"queue"})
 	StoreWritesTotal = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Name: "bullderdash_store_writes_total",

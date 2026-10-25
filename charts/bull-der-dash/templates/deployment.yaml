@@ -133,6 +133,12 @@ spec:
               value: {{ .Values.env.store.maxRows | quote }}
             - name: STORE_READ_CONCURRENCY
               value: {{ .Values.env.store.readConcurrency | quote }}
+            - name: HISTORY_START_ID
+              value: {{ .Values.env.store.historyStartId | quote }}
+            - name: HISTORY_READ_BATCH
+              value: {{ .Values.env.store.historyReadBatch | quote }}
+            - name: HISTORY_GAP_CHECK_SECONDS
+              value: {{ .Values.env.store.historyGapCheckSeconds | quote }}
             - name: LOG_LEVEL
               value: {{ .Values.env.logLevel | quote }}
             {{- with .Values.extraEnv }}

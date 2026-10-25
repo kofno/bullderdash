@@ -206,20 +206,27 @@ func main() {
 
 	workloadMetricsCtx, stopWorkloadMetrics := context.WithCancel(context.Background())
 	if cfg.WorkloadMetricsEnabled {
-		var collectorStore workloadmetrics.JobStore
+		startID := cfg.WorkloadMetricsStartID
 		if jobStore != nil {
-			collectorStore = jobStore
+			startID = "$"
 		}
-		collector := workloadmetrics.New(rdb, exp, collectorStore, workloadmetrics.Config{
+		collector := workloadmetrics.New(rdb, exp, nil, workloadmetrics.Config{
 			QueuePrefix:         cfg.QueuePrefix,
 			PollInterval:        time.Duration(cfg.WorkloadMetricsPollSeconds) * time.Second,
 			BlockTimeout:        time.Duration(cfg.WorkloadMetricsBlockSeconds) * time.Second,
 			BatchSize:           int64(cfg.WorkloadMetricsBatchSize),
 			MaxJobNamesPerQueue: cfg.WorkloadMetricsMaxJobNames,
-			StartID:             cfg.WorkloadMetricsStartID,
+			StartID:             startID,
 			TraceIDKeys:         cfg.StoreTraceKeys,
 		})
 		go collector.Run(workloadMetricsCtx)
+		if jobStore != nil {
+			go collector.RunHistory(workloadMetricsCtx, jobStore, workloadmetrics.HistoryConfig{
+				StartID:          cfg.HistoryStartID,
+				ReadBatch:        int64(cfg.HistoryReadBatch),
+				GapCheckInterval: time.Duration(cfg.HistoryGapCheckSeconds) * time.Second,
+			})
+		}
 		log.Printf("📈 workload metrics collector enabled: poll=%ds block=%ds batch=%d maxJobNamesPerQueue=%d startID=%s",
 			cfg.WorkloadMetricsPollSeconds,
 			cfg.WorkloadMetricsBlockSeconds,

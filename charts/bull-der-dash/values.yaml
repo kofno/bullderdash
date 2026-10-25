@@ -84,6 +84,9 @@ env:
     sweepTimeoutSeconds: 0
     maxRows: 0
     readConcurrency: 16
+    historyStartId: "$"
+    historyReadBatch: 1000
+    historyGapCheckSeconds: 10
   logLevel: "info"
 
 # Persistent storage for the SQLite job-history database. Enable this whenever

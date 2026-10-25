@@ -28,6 +28,9 @@ type Config struct {
 	WorkloadMetricsStartID         string
 	// Store (SQLite job history) configuration
 	StoreEnabled             bool
+	HistoryStartID           string
+	HistoryReadBatch         int
+	HistoryGapCheckSeconds   int
 	StoreDBPath              string
 	StoreWriteBuffer         int
 	StoreBatchSize           int
@@ -66,6 +69,9 @@ func Load() *Config {
 		WorkloadMetricsMaxJobNames:     getEnvInt("WORKLOAD_METRICS_MAX_JOB_NAMES_PER_QUEUE", 100),
 		WorkloadMetricsStartID:         getEnv("WORKLOAD_METRICS_START_ID", "$"),
 		StoreEnabled:                   getEnvBool("STORE_ENABLED", false),
+		HistoryStartID:                 getEnv("HISTORY_START_ID", "$"),
+		HistoryReadBatch:               getEnvInt("HISTORY_READ_BATCH", 1000),
+		HistoryGapCheckSeconds:         getEnvInt("HISTORY_GAP_CHECK_SECONDS", 10),
 		StoreDBPath:                    getEnv("STORE_DB_PATH", "/data/history.db"),
 		StoreWriteBuffer:               getEnvInt("STORE_WRITE_BUFFER", 4096),
 		StoreBatchSize:                 getEnvInt("STORE_BATCH_SIZE", 256),

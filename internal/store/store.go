@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +29,8 @@ import (
 // optional fields (empty strings, zero timestamps) are treated as "unknown"
 // and will not overwrite previously persisted non-zero values on upsert.
 type Record struct {
+	StreamID       string // Redis stream checkpoint, committed with this observation
+	CheckpointOnly bool
 	ID             string
 	Queue          string
 	Name           string
@@ -127,6 +130,8 @@ type Store struct {
 	writeGate chan struct{}
 	queueMu   sync.Mutex
 	stopping  bool // protected by queueMu
+	space     chan struct{}
+	stopped   chan struct{}
 }
 
 const defaultLimit = 100
@@ -175,6 +180,8 @@ func New(cfg Config) (*Store, error) {
 		recs:      make(chan Record, cfg.WriteBuffer),
 		done:      make(chan struct{}),
 		writeGate: make(chan struct{}, 1),
+		space:     make(chan struct{}, 1),
+		stopped:   make(chan struct{}),
 	}
 	s.updateQueueMetrics()
 	return s, nil
@@ -198,6 +205,7 @@ func normalize(cfg Config) Config {
 
 func migrate(db *sql.DB) error {
 	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS ingest_cursor (queue TEXT PRIMARY KEY, last_id TEXT NOT NULL, updated_at INTEGER NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS job_history (
 			rowid           INTEGER PRIMARY KEY AUTOINCREMENT,
 			id              TEXT NOT NULL,
@@ -280,6 +288,88 @@ func (s *Store) received() {
 	s.queueMu.Lock()
 	defer s.queueMu.Unlock()
 	s.updateQueueMetrics()
+	select {
+	case s.space <- struct{}{}:
+	default:
+	}
+}
+
+// EnqueueWait admits history without discarding on saturation. Cancellation
+// leaves the caller's cursor unchanged so the event can be replayed.
+func (s *Store) EnqueueWait(ctx context.Context, rec Record) error {
+	start := time.Now()
+	defer func() { metrics.HistoryEnqueueWait.Observe(time.Since(start).Seconds()) }()
+	normalizeRecord(&rec)
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		s.queueMu.Lock()
+		if s.stopping {
+			s.queueMu.Unlock()
+			return errors.New("history writer stopped")
+		}
+		select {
+		case s.recs <- rec:
+			s.updateQueueMetrics()
+			s.queueMu.Unlock()
+			return nil
+		default:
+			s.queueMu.Unlock()
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-s.stopped:
+			return errors.New("history writer stopped")
+		case <-s.space:
+		}
+	}
+}
+
+func (s *Store) Cursor(ctx context.Context, queue string) (string, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT last_id FROM ingest_cursor WHERE queue=?`, queue).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
+}
+
+// CompareStreamIDs compares both unsigned components, never lexicographically.
+func CompareStreamIDs(a, b string) (int, error) {
+	parse := func(id string) ([2]uint64, error) {
+		var out [2]uint64
+		parts := strings.Split(id, "-")
+		if len(parts) != 2 {
+			return out, fmt.Errorf("invalid stream ID %q", id)
+		}
+		for i := range parts {
+			v, err := strconv.ParseUint(parts[i], 10, 64)
+			if err != nil {
+				return out, fmt.Errorf("invalid stream ID %q: %w", id, err)
+			}
+			out[i] = v
+		}
+		return out, nil
+	}
+	x, err := parse(a)
+	if err != nil {
+		return 0, err
+	}
+	y, err := parse(b)
+	if err != nil {
+		return 0, err
+	}
+	for i := range x {
+		if x[i] < y[i] {
+			return -1, nil
+		}
+		if x[i] > y[i] {
+			return 1, nil
+		}
+	}
+	return 0, nil
 }
 
 func normalizeRecord(rec *Record) {
@@ -316,11 +406,22 @@ func (s *Store) Run(ctx context.Context) {
 		if len(batch) == 0 {
 			return
 		}
-		if err := s.writeBatch(ctx, batch); err != nil {
-			if ctx.Err() != nil {
-				return // Keep the exact interrupted batch for the shutdown drain.
+		for {
+			if err := s.writeBatch(ctx, batch); err != nil {
+				if ctx.Err() != nil {
+					return // Keep the exact interrupted batch for the shutdown drain.
+				}
+				if hasCheckpoint(batch) {
+					metrics.StoreWriteErrors.Inc()
+					log.Printf("history writer stalled; retaining batch and cursor: %v", err)
+					if pause(ctx, time.Second) != nil {
+						return
+					}
+					continue
+				}
+				s.lostBatch(batch, err)
 			}
-			s.lostBatch(batch, err)
+			break
 		}
 		batch = batch[:0]
 	}
@@ -344,30 +445,49 @@ func (s *Store) Run(ctx context.Context) {
 	// still enqueue after its context is cancelled.
 	s.queueMu.Lock()
 	s.stopping = true
+	close(s.stopped)
 	remaining := len(s.recs)
 	s.queueMu.Unlock()
-	s.flushFinal(drainCtx, batch)
+	blocked := !s.flushFinal(drainCtx, batch)
 	batch = batch[:0]
 	for i := 0; i < remaining; i++ {
 		rec := <-s.recs
 		s.received()
 		batch = append(batch, rec)
 		if len(batch) >= s.cfg.BatchSize {
-			s.flushFinal(drainCtx, batch)
+			if !blocked {
+				blocked = !s.flushFinal(drainCtx, batch)
+			}
 			batch = batch[:0]
 		}
 	}
-	s.flushFinal(drainCtx, batch)
+	if !blocked {
+		s.flushFinal(drainCtx, batch)
+	}
+}
+
+func hasCheckpoint(batch []Record) bool {
+	for _, r := range batch {
+		if r.StreamID != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // All final batches share one deadline, not a fresh timeout per batch.
-func (s *Store) flushFinal(ctx context.Context, batch []Record) {
+func (s *Store) flushFinal(ctx context.Context, batch []Record) bool {
 	if len(batch) == 0 {
-		return
+		return true
 	}
 	if err := s.writeBatch(ctx, batch); err != nil {
+		if hasCheckpoint(batch) {
+			log.Printf("history shutdown left uncommitted events for replay: %v", err)
+			return false
+		}
 		s.lostBatch(batch, err)
 	}
+	return true
 }
 
 func (s *Store) lostBatch(batch []Record, err error) {
@@ -447,7 +567,13 @@ func (s *Store) writeBatch(ctx context.Context, batch []Record) error {
 	defer func() { metrics.StoreWriteBatchDuration.Observe(time.Since(start).Seconds()) }()
 	err := s.mutate(ctx, "ingest", func() error { return s.writeBatchOnce(ctx, batch) })
 	if err == nil {
-		metrics.StoreWritesTotal.Add(float64(len(batch)))
+		var records int
+		for _, r := range batch {
+			if !r.CheckpointOnly {
+				records++
+			}
+		}
+		metrics.StoreWritesTotal.Add(float64(records))
 	}
 	return err
 }
@@ -465,11 +591,48 @@ func (s *Store) writeBatchOnce(ctx context.Context, batch []Record) error {
 	defer stmt.Close()
 
 	now := time.Now().UnixMilli()
+	cursors := make(map[string]string)
 	for _, r := range batch {
+		if r.StreamID != "" {
+			id := cursors[r.Queue]
+			if id == "" {
+				id = "0-0"
+			}
+			cmp, err := CompareStreamIDs(r.StreamID, id)
+			if err != nil {
+				return err
+			}
+			if cmp > 0 || cursors[r.Queue] == "" {
+				cursors[r.Queue] = r.StreamID
+			}
+		}
+		if r.CheckpointOnly {
+			continue
+		}
 		if _, err := stmt.ExecContext(ctx,
 			r.ID, r.Queue, r.Name, r.State, r.Attempts, r.ExecutionDepth, r.TraceID,
 			r.CreatedAtMs, r.FinishedAtMs, r.LastError, r.Data, r.Opts, now,
 		); err != nil {
+			return err
+		}
+	}
+	for queue, id := range cursors {
+		var old string
+		err := tx.QueryRowContext(ctx, `SELECT last_id FROM ingest_cursor WHERE queue=?`, queue).Scan(&old)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if old != "" {
+			cmp, err := CompareStreamIDs(id, old)
+			if err != nil {
+				return err
+			}
+			if cmp <= 0 {
+				continue
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO ingest_cursor(queue,last_id,updated_at) VALUES(?,?,?)
+				ON CONFLICT(queue) DO UPDATE SET last_id=excluded.last_id,updated_at=excluded.updated_at`, queue, id, now); err != nil {
 			return err
 		}
 	}
