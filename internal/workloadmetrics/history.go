@@ -253,9 +253,12 @@ func (c *Collector) checkHistoryProgress(ctx context.Context, sink HistoryStore,
 		if err != nil {
 			return err
 		}
-		if cmp < 0 && (info.EntriesAdded == 0 || info.EntriesAdded > info.Length) {
+		if cmp < 0 && (cursor != "0-0" || info.EntriesAdded == 0 || info.EntriesAdded > info.Length) {
 			gap = first
 		}
+	}
+	if info.Length == 0 && cmp < 0 {
+		gap = tail
 	}
 	// Redis 7+/Valkey expose the highest deleted ID; it also detects deletion
 	// inside the retained range (XDEL), not just prefix trimming.
