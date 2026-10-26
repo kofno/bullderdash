@@ -49,6 +49,27 @@ func TestHistoryRedisResumeAndTrim(t *testing.T) {
 	writerCtx, stopWriter := context.WithCancel(ctx)
 	go s.Run(writerCtx)
 	defer func() { stopWriter(); s.Close(); client.Del(ctx, key) }()
+	if err := s.EnqueueWait(ctx, store.Record{Queue: queue, StreamID: "0-0", CheckpointOnly: true}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		id, e := s.Cursor(ctx, queue)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if id == "0-0" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("empty cursor not committed")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	gapCheck := ""
+	if err := metricsOnly.checkHistoryProgress(ctx, s, queue, key, &gapCheck); err != nil {
+		t.Fatalf("new empty stream should not report error: %v", err)
+	}
 	for _, id := range []string{"1000-0", "1000-1", "1000-2"} {
 		if err := client.XAdd(ctx, &redis.XAddArgs{Stream: key, ID: id, Values: map[string]any{"event": "completed", "jobId": id}}).Err(); err != nil {
 			t.Fatal(err)
@@ -109,5 +130,20 @@ func TestHistoryRedisResumeAndTrim(t *testing.T) {
 	metrics.HistoryGaps.WithLabelValues(queue).Write(&after)
 	if after.Counter.GetValue()-before.Counter.GetValue() != 1 {
 		t.Fatal("trim gap missing or duplicate")
+	}
+	runCtx, cancel = context.WithCancel(ctx)
+	go func() {
+		done <- h.historyQueue(runCtx, s, HistoryConfig{StartID: "$", ReadBatch: 2, GapCheckInterval: 20 * time.Millisecond}, queue)
+	}()
+	waitCursor("1000-5")
+	cancel()
+	<-done
+	if err := h.checkHistoryProgress(ctx, s, queue, key, &gap); err != nil {
+		t.Fatal(err)
+	}
+	var lag dto.Metric
+	metrics.HistoryLag.WithLabelValues(queue).Write(&lag)
+	if lag.Gauge.GetValue() != 0 {
+		t.Fatal("caught-up cursor retained stale lag")
 	}
 }

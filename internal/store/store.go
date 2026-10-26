@@ -412,7 +412,7 @@ func (s *Store) Run(ctx context.Context) {
 					return // Keep the exact interrupted batch for the shutdown drain.
 				}
 				if hasCheckpoint(batch) {
-					metrics.StoreWriteErrors.Inc()
+					metrics.HistoryWriteErrors.Inc()
 					log.Printf("history writer stalled; retaining batch and cursor: %v", err)
 					if pause(ctx, time.Second) != nil {
 						return

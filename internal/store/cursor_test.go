@@ -82,6 +82,7 @@ func TestFailedCheckpointBlocksLaterCursorOnShutdown(t *testing.T) {
 	if _, err := s.db.Exec(`CREATE TRIGGER reject_history BEFORE INSERT ON job_history BEGIN SELECT RAISE(ABORT,'injected failure'); END`); err != nil {
 		t.Fatal(err)
 	}
+
 	s.EnqueueWait(context.Background(), Record{ID: "bad", Queue: "q", StreamID: "1-0"})
 	s.EnqueueWait(context.Background(), Record{Queue: "q", StreamID: "2-0", CheckpointOnly: true})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -92,4 +93,44 @@ func TestFailedCheckpointBlocksLaterCursorOnShutdown(t *testing.T) {
 	if err != nil || id != "" {
 		t.Fatalf("later checkpoint skipped failed record: %q %v", id, err)
 	}
+}
+
+func TestPermanentHistoryErrorRetainsBatchUntilRecovery(t *testing.T) {
+	s := quietStore(t, Config{BatchSize: 1, FlushInterval: time.Millisecond})
+	_, err := s.db.Exec(`CREATE TRIGGER reject_history BEFORE INSERT ON job_history BEGIN SELECT RAISE(ABORT,'injected failure'); END`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go s.Run(ctx)
+	defer func() { cancel(); <-s.done }()
+	if err := s.EnqueueWait(ctx, Record{ID: "retry", Queue: "q", StreamID: "1-0"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EnqueueWait(ctx, Record{Queue: "q", StreamID: "2-0", CheckpointOnly: true}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(40 * time.Millisecond)
+	id, err := s.Cursor(ctx, "q")
+	if err != nil || id != "" {
+		t.Fatalf("failed batch advanced %q %v", id, err)
+	}
+	if _, err := s.db.Exec(`DROP TRIGGER reject_history`); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		id, err = s.Cursor(ctx, "q")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if id == "2-0" {
+			if _, err := s.Get(ctx, "retry"); err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("history never recovered from permanent write error")
 }

@@ -224,6 +224,12 @@ func (c *Collector) checkHistoryProgress(ctx context.Context, sink HistoryStore,
 	}
 	info, err := c.streamInfo(ctx, key)
 	if err != nil {
+		// BullMQ can create the queue's id key before its first event. An
+		// initialized empty-stream cursor has no missing history to report.
+		if cursor == "0-0" && strings.Contains(err.Error(), "no such key") {
+			metrics.HistoryLag.WithLabelValues(queue).Set(0)
+			return nil
+		}
 		return err
 	}
 	tail := info.LastGeneratedID

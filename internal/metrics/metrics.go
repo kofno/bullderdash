@@ -183,8 +183,11 @@ var (
 		Name: "bullderdash_history_gaps_total", Help: "Distinct detected ranges of unavailable Redis stream events; not an exact lost-job count",
 	}, []string{"queue"})
 	HistoryPartial = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "bullderdash_history_partial_records_total", Help: "Missing-hash terminal observations admitted as partial history, including replay attempts",
+		Name: "bullderdash_history_partial_records_total", Help: "Missing-hash terminal observations attempted as partial history, including cancelled/replayed attempts",
 	}, []string{"queue"})
+	HistoryWriteErrors = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "bullderdash_history_write_errors_total", Help: "Non-contention history batch failures retained for retry without advancing cursors",
+	})
 	StoreWritesTotal = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Name: "bullderdash_store_writes_total",
