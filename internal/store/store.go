@@ -298,7 +298,19 @@ func (s *Store) received() {
 // leaves the caller's cursor unchanged so the event can be replayed.
 func (s *Store) EnqueueWait(ctx context.Context, rec Record) error {
 	start := time.Now()
-	defer func() { metrics.HistoryEnqueueWait.Observe(time.Since(start).Seconds()) }()
+	defer func() {
+		metrics.HistoryEnqueueWait.Observe(time.Since(start).Seconds())
+		// Receives can coalesce notifications. Pass remaining capacity to
+		// another waiter even if this admission was cancelled.
+		s.queueMu.Lock()
+		if len(s.recs) < cap(s.recs) {
+			select {
+			case s.space <- struct{}{}:
+			default:
+			}
+		}
+		s.queueMu.Unlock()
+	}()
 	normalizeRecord(&rec)
 	for {
 		if err := ctx.Err(); err != nil {
