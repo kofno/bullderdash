@@ -106,6 +106,9 @@ export STORE_SWEEP_PAUSE_MILLIS=25
 export STORE_SWEEP_TIMEOUT_SECONDS=0
 export STORE_MAX_ROWS=0
 export STORE_READ_CONCURRENCY=16
+export HISTORY_START_ID='$'
+export HISTORY_READ_BATCH=1000
+export HISTORY_GAP_CHECK_SECONDS=10
 export LOG_LEVEL=info
 
 # Build and run
@@ -161,10 +164,10 @@ All configuration is done via environment variables:
 | `WORKLOAD_METRICS_BLOCK_SECONDS` | `1` | Redis `XREAD` block timeout for workload metrics |
 | `WORKLOAD_METRICS_BATCH_SIZE` | `100` | Maximum BullMQ event stream entries read per `XREAD` call |
 | `WORKLOAD_METRICS_MAX_JOB_NAMES_PER_QUEUE` | `100` | Per-queue job-name label cardinality cap; additional names use `__other__` |
-| `WORKLOAD_METRICS_START_ID` | `$` | Initial BullMQ event stream ID; `$` starts with new events only |
+| `WORKLOAD_METRICS_START_ID` | `$` | Initial metrics stream position; forced to `$` when the store is enabled (history uses `HISTORY_START_ID`) |
 | `STORE_ENABLED` | `false` | Persist completed/failed jobs to the embedded SQLite history store (powers `/console` search); requires `WORKLOAD_METRICS_ENABLED=true` |
 | `STORE_DB_PATH` | `/data/history.db` | Path to the SQLite database file; its directory must be writable (mount a volume) |
-| `STORE_WRITE_BUFFER` | `4096` | Size of the in-memory write channel; records are dropped (and counted) when full |
+| `STORE_WRITE_BUFFER` | `4096` | History writer channel capacity; the history reader waits when full, without blocking live metrics |
 | `STORE_BATCH_SIZE` | `256` | Max records flushed per write transaction |
 | `STORE_FLUSH_MILLIS` | `500` | Max time a batch waits before being flushed |
 | `STORE_TRACE_KEYS` | (empty) | Comma-separated payload keys to derive a trace id from; falls back to flow-root/own job id |
@@ -176,6 +179,9 @@ All configuration is done via environment variables:
 | `STORE_SWEEP_TIMEOUT_SECONDS` | `0` | Optional per-sweep deadline; `0` means no artificial deadline |
 | `STORE_MAX_ROWS` | `0` | Optional hard cap on total history rows (newest kept); `0` disables the cap |
 | `STORE_READ_CONCURRENCY` | `16` | Max concurrent search/detail reads; excess requests get HTTP 503 |
+| `HISTORY_START_ID` | `$` | Initial position for new history queues only; known queues resume the durable SQLite cursor. Use `0-0` to replay available retained events |
+| `HISTORY_READ_BATCH` | `1000` | Maximum events per per-queue history XREAD |
+| `HISTORY_GAP_CHECK_SECONDS` | `10` | Interval for per-queue stream-gap checks and committed-cursor lag refresh, including while backpressured |
 | `LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
 
 Sentinel behavior:

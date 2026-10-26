@@ -1576,6 +1576,228 @@
           "legendFormat": "swept {{instance}}"
         }
       ]
+    },
+    {
+      "id": 23,
+      "type": "row",
+      "title": "Durable history reader",
+      "collapsed": false,
+      "datasource": null,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 74
+      },
+      "panels": []
+    },
+    {
+      "id": 24,
+      "type": "timeseries",
+      "title": "Committed history ingest lag",
+      "description": "Durable cursor age while behind the observed stream tail; zero when caught up. Refreshed independently while blocked and idle. Unlike live event lag, this measures history backlog. No queue filter is applied to store-wide panels.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 75
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "bullderdash_history_ingest_lag_seconds{job=\"bull-der-dash\",queue=~\"$queue\"}",
+          "range": true,
+          "refId": "A",
+          "legendFormat": "{{queue}} {{instance}}"
+        }
+      ]
+    },
+    {
+      "id": 25,
+      "type": "timeseries",
+      "title": "Potential stream gaps in 10m",
+      "description": "Distinct unavailable range boundaries ahead of the durable cursor. Conservative warning, not an exact lost-job count: some events may already be buffered. Increase producer streams.events.maxLen before the tolerated lag window is exhausted.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 75
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "increase(bullderdash_history_gaps_total{job=\"bull-der-dash\",queue=~\"$queue\"}[10m])",
+          "range": true,
+          "refId": "A",
+          "legendFormat": "{{queue}} {{instance}}"
+        }
+      ]
+    },
+    {
+      "id": 26,
+      "type": "timeseries",
+      "title": "History enqueue wait p95",
+      "description": "Time admitting a history item, including cancelled waits. Saturation blocks the history reader; it does not block the live metrics reader or discard the event.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 83
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le, instance) (rate(bullderdash_history_enqueue_wait_seconds_bucket{job=\"bull-der-dash\"}[$__rate_interval])))",
+          "range": true,
+          "refId": "A",
+          "legendFormat": "{{instance}}"
+        }
+      ]
+    },
+    {
+      "id": 27,
+      "type": "timeseries",
+      "title": "Partial history records /s",
+      "description": "Missing job hashes saved from terminal events; includes replay/cancellation attempts. Retain job hashes longer than tolerated ingest lag if payload/name/lineage search is required.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 83
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "rate(bullderdash_history_partial_records_total{job=\"bull-der-dash\",queue=~\"$queue\"}[$__rate_interval])",
+          "range": true,
+          "refId": "A",
+          "legendFormat": "{{queue}} {{instance}}"
+        }
+      ]
     }
   ]
 }

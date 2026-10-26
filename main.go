@@ -232,7 +232,7 @@ func main() {
 			cfg.WorkloadMetricsBlockSeconds,
 			cfg.WorkloadMetricsBatchSize,
 			cfg.WorkloadMetricsMaxJobNames,
-			cfg.WorkloadMetricsStartID)
+			startID)
 	}
 
 	// 4. Setup server with graceful shutdown

@@ -18,6 +18,11 @@ it. The workload dashboards light up when `WORKLOAD_METRICS_ENABLED=true`.
 All three expose a **`datasource`** variable (pick any Prometheus) and a
 **`queue`** filter; the workload board adds a **`name`** (job-name) filter.
 
+History reliability panels also distinguish **committed history lag** from live
+event lag, and show potential stream gaps, blocking enqueue wait and missing-hash
+partial-record attempts. Set producer BullMQ `streams.events.maxLen` for the
+tolerated history lag window; see `DOCS.md` for cursor/replay and alert semantics.
+
 ## Quick start (local)
 
 1. Run bull-der-dash with workload metrics on:
