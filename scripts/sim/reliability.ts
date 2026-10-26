@@ -20,7 +20,7 @@ const phases = [
 ];
 const queue = new Queue(queueName, {
   connection,
-  streams: { events: { maxLen: 1_000_000 } },
+  streams: { events: { maxLen: positiveInt('SIM_STREAM_MAXLEN', 1_000_000) } },
 });
 const client = await queue.client;
 if (await client.exists(queue.toKey('id'))) {
@@ -97,7 +97,7 @@ try {
     timeline, completedIds, failedIds, streamInfo,
     counts: await queue.getJobCounts('completed', 'failed', 'waiting', 'active'),
     eventStreamLength: await client.xlen(queue.toKey('events')),
-    eventStreamMaxLen: 1_000_000,
+    eventStreamMaxLen: positiveInt('SIM_STREAM_MAXLEN', 1_000_000),
   };
   await Bun.write(output, JSON.stringify(result, null, 2));
   console.log(JSON.stringify({ event: 'finished', offered, counts: result.counts, output }));

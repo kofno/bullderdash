@@ -39,7 +39,7 @@ def metrics(text):
     return {key: float(value) for line in text.splitlines()
             if line and not line.startswith("#")
             for key, value in [line.rsplit(" ", 1)]
-            if key.startswith(("bullderdash_store_", "bullmq_workload_", "bullmq_jobs_finished_"))}
+            if key.startswith(("bullderdash_store_", "bullderdash_history_", "bullmq_workload_", "bullmq_jobs_finished_", "redis_operation_"))}
 
 
 def stop_app(app, log):
@@ -181,8 +181,29 @@ def reconcile_after(args, label, details):
     return details
 
 
+def validate_history_result(details, scenario):
+    info = dict(zip(details["stream_info"][::2], details["stream_info"][1::2]))
+    assert details["committed_cursors_after_shutdown"]["history-reliability"] == info["last-generated-id"]
+    assert details["rows_after_shutdown"] + len(details["missing_ids"]) == details["offered"]
+    assert not details["unexpected_ids"] and not details["state_mismatches"]
+    assert details["console_html"] and details["fts_rows"] == 1000
+    assert details["final_metrics"]["bullderdash_store_writes_dropped_total"] == 0
+    if scenario == "trim":
+        assert any(v > 0 for k, v in details["final_metrics"].items()
+                   if k.startswith("bullderdash_history_gaps_total"))
+    else:
+        assert not details["missing_ids"], len(details["missing_ids"])
+    if scenario == "restart":
+        assert len(details["restarts"]) == 1
+        before = details["restarts"][0]["committed_before_kill"]["history-reliability"]
+        assert before and before != info["last-generated-id"]
+
+
 def run(args, seed, build, binary, buffer):
     label = f"{build}-buffer{buffer}"
+    scenario = getattr(args, "scenario", None)
+    if scenario:
+        label += "-" + scenario
     summary = args.output / f"{label}.summary.json"
     if summary.exists():
         details = json.loads(summary.read_text())
@@ -196,7 +217,8 @@ def run(args, seed, build, binary, buffer):
     timestamp = conn.execute(
         "SELECT finished_at FROM job_history WHERE queue='seed-only' AND id='seed-0'").fetchone()[0]
     conn.close()
-    if timestamp + int(BASE_ENV["STORE_COMPLETED_TTL_HOURS"]) * 3_600_000 <= time.time() * 1000:
+    ttl = 24 if scenario else int(BASE_ENV["STORE_COMPLETED_TTL_HOURS"])
+    if timestamp + ttl * 3_600_000 <= time.time() * 1000:
         raise RuntimeError("retained seed is now past TTL; build a new fixture, not a mismatched retention run")
     subprocess.run(["docker", "exec", args.container, "valkey-cli", "FLUSHDB"],
                    check=True, capture_output=True)
@@ -204,6 +226,9 @@ def run(args, seed, build, binary, buffer):
     shutil.copyfile(seed, dbpath)
     copy_seconds = time.monotonic()-copy_started
     env = dict(BASE_ENV, STORE_WRITE_BUFFER=str(buffer))
+    if scenario:
+        env.update(STORE_COMPLETED_TTL_HOURS="24", HISTORY_START_ID="$",
+                   HISTORY_READ_BATCH="1000", HISTORY_GAP_CHECK_SECONDS="1")
     app, log, startup = start_app(binary, dbpath, args.output / f"{label}.app.log", env)
     begin = time.monotonic()
     stop = threading.Event()
@@ -216,16 +241,18 @@ def run(args, seed, build, binary, buffer):
     simlog = (args.output / f"{label}.sim.log").open("wb")
     snapshots = (args.output / f"{label}.metrics.jsonl").open("w")
     manifest = args.output / f"{label}.bullmq.json"
+    restarts = []
     try:
         sim_env = dict(os.environ, REDIS_URL="redis://127.0.0.1:16389", SIM_QUEUE="history-reliability",
                        SIM_OUTPUT=str(manifest), SIM_START_DELAY_SECONDS="5", SIM_STEADY_RATE="78",
                        SIM_STEADY_SECONDS="26", SIM_BURST_RATE="2000", SIM_BURST_SECONDS="60",
                        SIM_RECOVERY_SECONDS="60", SIM_DRAIN_SECONDS="180")
+        sim_env["SIM_STREAM_MAXLEN"] = "2000" if scenario == "trim" else "1000000"
         sim = subprocess.Popen(["bun", "run", "reliability.ts"], cwd=ROOT / "scripts" / "sim",
                                env=sim_env, stdout=simlog, stderr=subprocess.STDOUT)
         last_search = -10
         # Continue sampling during post-sim collector catch-up and sweep completion.
-        deadline = begin + 420
+        deadline = begin + (650 if scenario else 420)
         final = {}
         result = None
         while time.monotonic() < deadline:
@@ -236,6 +263,16 @@ def run(args, seed, build, binary, buffer):
             snapshots.flush()
             for key, value in final.items():
                 maxima[key] = max(maxima[key], value)
+            if scenario == "restart" and not restarts and elapsed >= 60:
+                conn = sqlite3.connect(dbpath, timeout=10)
+                before = dict(conn.execute("SELECT queue,last_id FROM ingest_cursor"))
+                conn.close()
+                app.kill()  # Only the child process owned by this runner.
+                app.wait(timeout=10)
+                log.close()
+                app, log, restart_time = start_app(binary, dbpath, args.output / f"{label}.restart.log", env)
+                restarts.append({"at": elapsed, "committed_before_kill": before,
+                                 "startup_seconds": restart_time, "metrics_before_kill": final})
             if elapsed-last_search >= 10:
                 query_start = time.monotonic()
                 try:
@@ -252,7 +289,17 @@ def run(args, seed, build, binary, buffer):
                 observed = sum(v for k, v in final.items() if k.startswith("bullmq_jobs_finished_total"))
                 persisted = final.get("bullderdash_store_writes_total", 0)
                 dropped = final.get("bullderdash_store_writes_dropped_total", 0)
-                if (observed == result["offered"] and persisted+dropped == observed and
+                if scenario:
+                    conn = sqlite3.connect(dbpath, timeout=10)
+                    row = conn.execute("SELECT last_id FROM ingest_cursor WHERE queue='history-reliability'").fetchone()
+                    conn.close()
+                    tail = dict(zip(result["streamInfo"][::2], result["streamInfo"][1::2]))["last-generated-id"]
+                    if (row and row[0] == tail and
+                        final.get("bullderdash_store_sweep_deleted_total", 0) + sum(
+                            r["metrics_before_kill"].get("bullderdash_store_sweep_deleted_total", 0) for r in restarts
+                        ) >= args.expired and elapsed >= 160):
+                        break
+                elif (observed == result["offered"] and persisted+dropped == observed and
                         final.get("bullderdash_store_sweep_deleted_total", 0) == args.expired and elapsed >= 160):
                     break
             time.sleep(.5)
@@ -281,8 +328,9 @@ def run(args, seed, build, binary, buffer):
             "max_sampled_metrics": dict(maxima), "search_samples": searches, "fts_rows": len(search),
             "console_html": "html" in fetch("/console").lower(), "competing_writer": writer_results,
             "stream_info": result["streamInfo"], "stream_length": result["eventStreamLength"],
+            "restarts": restarts,
             "monitor_finished_seconds": monitor_finished,
-            "workload_deadline_reached": monitor_finished >= 420,
+            "workload_deadline_reached": monitor_finished >= (650 if scenario else 420),
         }
         summary.write_text(json.dumps(details, indent=2))
         print(json.dumps({"label": label, "startup_seconds": startup, "elapsed_seconds": details["elapsed_seconds"],
@@ -310,6 +358,10 @@ def run(args, seed, build, binary, buffer):
     details["fts_integrity_seconds"] = time.monotonic()-started
     conn.close()
     details["app_exit_code"] = app.returncode
+    if scenario:
+        conn = sqlite3.connect(dbpath)
+        details["committed_cursors_after_shutdown"] = dict(conn.execute("SELECT queue,last_id FROM ingest_cursor"))
+        conn.close()
     summary.write_text(json.dumps(details, indent=2))
     return reconcile_after(args, label, details)
 
@@ -323,6 +375,8 @@ def main():
     parser.add_argument("--rows", type=int, default=3_000_000)
     parser.add_argument("--expired", type=int, default=1_000_000)
     parser.add_argument("--buffer", type=int, default=16384)
+    parser.add_argument("--seed", type=Path, help="Reuse a prebuilt baseline-schema fixture without rewriting timestamps")
+    parser.add_argument("--scenario", choices=["normal","restart","trim"], help="Phase 2 only; run --phase1 binary with history metrics")
     args = parser.parse_args()
     if not 0 < args.expired < args.rows or args.buffer <= 0:
         parser.error("require 0 < expired < rows and positive buffer")
@@ -335,7 +389,12 @@ def main():
     bindings = inspect["NetworkSettings"]["Ports"]["6379/tcp"]
     if bindings != [{"HostIp": "127.0.0.1", "HostPort": "16389"}]:
         raise RuntimeError("expected a dedicated container published only at 127.0.0.1:16389")
-    seed = prepare_seed(args)
+    seed = args.seed.resolve() if args.seed else prepare_seed(args)
+    if args.scenario:
+        value = run(args, seed, "phase2", args.phase1, args.buffer)
+        validate_history_result(value, args.scenario)
+        print("Phase 2 scenario completed with final ID/cursor reconciliation", flush=True)
+        return
     for build, binary in [("baseline", args.baseline), ("phase1", args.phase1)]:
         value = run(args, seed, build, binary, args.buffer)
         assert not value["unexpected_ids"] and not value["state_mismatches"]
