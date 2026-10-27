@@ -1087,6 +1087,717 @@
           "legendFormat": "cpu"
         }
       ]
+    },
+    {
+      "id": 15,
+      "type": "row",
+      "title": "SQLite history reliability",
+      "collapsed": false,
+      "datasource": null,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 41
+      },
+      "panels": []
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "History channel depth / capacity",
+      "description": "Requires STORE_ENABLED. Excludes the in-flight batch. A rising channel means ingestion is outrunning persistence; capacity only absorbs bursts. Store panels are process-wide, not queue-filtered.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 42
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "bullderdash_store_queue_depth{job=\"bull-der-dash\"}",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "depth {{instance}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "bullderdash_store_queue_capacity{job=\"bull-der-dash\"}",
+          "range": true,
+          "instant": false,
+          "refId": "B",
+          "legendFormat": "capacity {{instance}}"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "History records lost /s",
+      "description": "Full-channel drops are distinct from records lost to permanent write errors, shutdown deadline exhaustion or enqueue after shutdown. Check lost_records logs for error losses. Neither signal by itself proves the sweeper is the cause.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 42
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "rate(bullderdash_store_writes_dropped_total{job=\"bull-der-dash\"}[$__rate_interval])",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "channel full {{instance}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "rate(bullderdash_store_write_lost_records_total{job=\"bull-der-dash\"}[$__rate_interval])",
+          "range": true,
+          "instant": false,
+          "refId": "B",
+          "legendFormat": "write error / shutdown {{instance}}"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "type": "timeseries",
+      "title": "Write admission wait p95",
+      "description": "In-process admission wait per attempt, including cancelled waits. Excludes SQLite lock wait and execution. High ingest wait with long DELETEs suggests smaller sweep batches or more pacing.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 50
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le, operation, instance) (rate(bullderdash_store_write_lock_wait_seconds_bucket{job=\"bull-der-dash\"}[$__rate_interval])))",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{operation}} {{instance}}"
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "SQLite contention retries /s",
+      "description": "BUSY / LOCKED retries, including extended SQLite codes. The exact batch is retained. Persistent retries may indicate external writers; do not confuse this with in-process admission wait.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 50
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "rate(bullderdash_store_write_retries_total{job=\"bull-der-dash\"}[$__rate_interval])",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "{{operation}} {{instance}}"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Sweep total / DELETE attempt duration p95",
+      "description": "Total includes admission, SQLite, retries and pacing. DELETE attempt includes pool/SQLite lock wait, FTS triggers and commit, but excludes admission/pacing. Both histograms include failures. Whole-sweep samples may be sparse at the default 300s interval.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 58
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le, instance) (rate(bullderdash_store_sweep_duration_seconds_bucket{job=\"bull-der-dash\"}[$__rate_interval])))",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "whole sweep {{instance}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le, instance) (rate(bullderdash_store_sweep_batch_duration_seconds_bucket{job=\"bull-der-dash\"}[$__rate_interval])))",
+          "range": true,
+          "instant": false,
+          "refId": "B",
+          "legendFormat": "DELETE attempt {{instance}}"
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Ingest batch duration p95",
+      "description": "Batch duration including admission, retries and errors, but excluding channel/batch-formation wait. Older builds observed successful batches only. Persistent growth with backlog signals ingest pressure.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 58
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le, instance) (rate(bullderdash_store_write_batch_duration_seconds_bucket{job=\"bull-der-dash\"}[$__rate_interval])))",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "ingest batch {{instance}}"
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Persisted / swept records per second",
+      "description": "Successful persisted observations (including upserts) versus deleted history rows. At steady state deletion should broadly keep up with new terminal-job arrivals, but upserts and differing TTL tiers mean the rates need not match exactly.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 66
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "rate(bullderdash_store_writes_total{job=\"bull-der-dash\"}[$__rate_interval])",
+          "range": true,
+          "instant": false,
+          "refId": "A",
+          "legendFormat": "persisted {{instance}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "rate(bullderdash_store_sweep_deleted_total{job=\"bull-der-dash\"}[$__rate_interval])",
+          "range": true,
+          "instant": false,
+          "refId": "B",
+          "legendFormat": "swept {{instance}}"
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "type": "row",
+      "title": "Durable history reader",
+      "collapsed": false,
+      "datasource": null,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 74
+      },
+      "panels": []
+    },
+    {
+      "id": 24,
+      "type": "timeseries",
+      "title": "Committed history ingest lag",
+      "description": "Durable cursor age while behind the observed stream tail; zero when caught up. Refreshed independently while blocked and idle. Unlike live event lag, this measures history backlog. No queue filter is applied to store-wide panels.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 75
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "bullderdash_history_ingest_lag_seconds{job=\"bull-der-dash\",queue=~\"$queue\"}",
+          "range": true,
+          "refId": "A",
+          "legendFormat": "{{queue}} {{instance}}"
+        }
+      ]
+    },
+    {
+      "id": 25,
+      "type": "timeseries",
+      "title": "Potential stream gaps in 10m",
+      "description": "Distinct unavailable range boundaries ahead of the durable cursor. Conservative warning, not an exact lost-job count: some events may already be buffered. Increase producer streams.events.maxLen before the tolerated lag window is exhausted.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 75
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "increase(bullderdash_history_gaps_total{job=\"bull-der-dash\",queue=~\"$queue\"}[10m])",
+          "range": true,
+          "refId": "A",
+          "legendFormat": "{{queue}} {{instance}}"
+        }
+      ]
+    },
+    {
+      "id": 26,
+      "type": "timeseries",
+      "title": "History enqueue wait p95",
+      "description": "Time admitting a history item, including cancelled waits. Saturation blocks the history reader; it does not block the live metrics reader or discard the event.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 83
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le, instance) (rate(bullderdash_history_enqueue_wait_seconds_bucket{job=\"bull-der-dash\"}[$__rate_interval])))",
+          "range": true,
+          "refId": "A",
+          "legendFormat": "{{instance}}"
+        }
+      ]
+    },
+    {
+      "id": 27,
+      "type": "timeseries",
+      "title": "Partial history records /s",
+      "description": "Missing job hashes saved from terminal events; includes replay/cancellation attempts. Retain job hashes longer than tolerated ingest lag if payload/name/lineage search is required.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 83
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "rate(bullderdash_history_partial_records_total{job=\"bull-der-dash\",queue=~\"$queue\"}[$__rate_interval])",
+          "range": true,
+          "refId": "A",
+          "legendFormat": "{{queue}} {{instance}}"
+        }
+      ]
     }
   ]
 }

@@ -101,10 +101,10 @@ Environment variables:
 - `WORKLOAD_METRICS_BLOCK_SECONDS` (default `1`)
 - `WORKLOAD_METRICS_BATCH_SIZE` (default `100`)
 - `WORKLOAD_METRICS_MAX_JOB_NAMES_PER_QUEUE` (default `100`)
-- `WORKLOAD_METRICS_START_ID` (default `$`)
+- `WORKLOAD_METRICS_START_ID` (default `$`) - forced to `$` when the store is enabled; use `HISTORY_START_ID` for history backfill
 - `STORE_ENABLED` (default `false`) - persist completed/failed jobs to SQLite and enable `/console`; requires `WORKLOAD_METRICS_ENABLED=true`, since the workload collector is what feeds the store
 - `STORE_DB_PATH` (default `/data/history.db`) - SQLite file path; its directory must be writable
-- `STORE_WRITE_BUFFER` (default `4096`) - in-memory write channel size; records drop when full
+- `STORE_WRITE_BUFFER` (default `4096`) - in-memory channel size; history ingestion waits when full, live metrics remain independent
 - `STORE_BATCH_SIZE` (default `256`) - max records per write transaction
 - `STORE_FLUSH_MILLIS` (default `500`) - max time a batch waits before flushing
 - `STORE_TRACE_KEYS` (default empty) - comma-separated payload keys used to derive a trace id
@@ -112,20 +112,186 @@ Environment variables:
 - `STORE_FAILED_TTL_HOURS` (default `336`) - retention for failed history (14 days); `0` disables
 - `STORE_SWEEP_SECONDS` (default `300`) - interval between retention sweeps
 - `STORE_SWEEP_BATCH` (default `2000`) - rows deleted per sweep statement; small batches keep each DELETE (and its per-row FTS5 trigger work) fast so a large backlog drains across many small transactions instead of one oversized DELETE
+- `STORE_SWEEP_PAUSE_MILLIS` (default `25`) - cancellation-aware pause between full DELETE batches; `0` uses the default, negative disables pacing
 - `STORE_SWEEP_TIMEOUT_SECONDS` (default `0`) - optional per-sweep deadline; `0` means no artificial deadline (the sweep drains the eligible backlog in batches, cancelling only on shutdown)
 - `STORE_MAX_ROWS` (default `0`) - optional hard cap on total history rows; `0` disables
 - `STORE_READ_CONCURRENCY` (default `16`) - max concurrent search/detail reads; excess gets `503`
+- `HISTORY_START_ID` (default `$`) - new queues only; resolve and commit the current tail once. `0-0` replays retained events. Known queues always resume their SQLite cursor
+- `HISTORY_READ_BATCH` (default `1000`) - maximum events per per-queue history XREAD
+- `HISTORY_GAP_CHECK_SECONDS` (default `10`) - stream-gap/lag monitoring interval, independent of blocked enqueue
 - `LOG_LEVEL` (default `info`)
+
+The chart exposes the history settings under `env.store.historyStartId`,
+`env.store.historyReadBatch` and `env.store.historyGapCheckSeconds`.
 
 Workload metrics are collected from BullMQ event streams in a background
 goroutine. `/metrics` only exports in-memory Prometheus data; it does not scan
 retained jobs or issue Redis commands during a scrape.
 
-When `STORE_ENABLED=true`, terminal (completed/failed) jobs observed by the
-workload collector are written to the embedded SQLite history store by a
-background writer, and a sweeper ages them out per the `STORE_*_TTL_HOURS`
+When `STORE_ENABLED=true`, a separate history reader reuses the workload
+collector's discovered queues and follows terminal (completed/failed) events
+into the embedded SQLite store. The live metrics reader stays real-time at `$`
+and uses HMGET; it never enqueues history or replays historical metrics.
+The history reader uses HGETALL/lineage resolution, its own cursors and a
+background writer, and a sweeper ages records out per the `STORE_*_TTL_HOURS`
 settings (failures are kept longer than successes). Search and job-detail reads
 are served from SQLite, never from live Redis.
+
+#### History write reliability and diagnosis
+
+The background writer and retention DELETEs share cancellation-aware, in-process
+write admission. Admission is released after every DELETE batch, including a
+failed attempt; the sweeper pauses between full batches to let ingestion progress.
+WAL readers still use separate connections. SQLite `BUSY`/`LOCKED` errors
+(including extended codes) retry the **same** transaction batch with exponential
+backoff from 10ms to a 250ms cap, until success or cancellation. A permanent
+history-batch error stalls that batch, logs the error, increments
+`bullderdash_history_write_errors_total`, and retries once per second until
+recovery or cancellation; **no later cursor can bypass it**. The compatibility
+drop-on-full `Store.Enqueue` API remains best-effort and logs/counts discarded
+non-history batches. Shutdown retries an interrupted batch and drains the
+channel snapshot using one shared five-second
+deadline, not five seconds per batch. A SQLite busy wait or in-flight statement
+can delay cancellation; the existing driver busy timeout remains five seconds.
+History `EnqueueWait` rejects cancellation/shutdown without accepting a record.
+Uncommitted history is replayed after restart, rather than counted as lost.
+Compatibility `Enqueue` callers can still drop and count post-shutdown records.
+
+#### History checkpoints, producer retention, and alerts
+
+SQLite `ingest_cursor(queue PRIMARY KEY, last_id, updated_at)` is migrated
+idempotently without rewriting history/FTS. Each history observation carries its
+Redis stream ID; the per-queue numeric `(milliseconds, sequence)` maximum is
+upserted **in the same transaction** as the records. Non-terminal runs produce
+ordered cursor-only checkpoints through the same writer, coalesced within an
+XREAD response. The writer does not count checkpoints as persisted job records.
+Reads can be ahead of the committed cursor by a bounded in-memory batch/channel;
+on crash or exhausted shutdown drain those events are replayed at least once.
+Existing `(queue,id)` upserts make replay idempotent, and history replay never
+increments live workload completion counters.
+
+New queues use `HISTORY_START_ID`. With `$`, the current stream tail (or `0-0`
+for a not-yet-created stream) is committed before the first read, so repeated
+XREAD `$` calls cannot silently skip between polls. Existing queues ignore this
+setting and resume their stored cursor. The first deployment deliberately skips
+pre-existing events with the default `$`; choose `0-0` for available backfill.
+This is not Redis consumer-group state: all operations are read-only (`XREAD`,
+`XINFO STREAM`, hash reads), with no `XREADGROUP`, `XACK` or Redis writes.
+
+History overload now increases lag and enqueue wait instead of dropping.
+The Redis event stream is the replay buffer: **the producer must retain it
+long enough**. Set BullMQ `streams.events.maxLen` to at least
+`peak jobs/s * events per job * tolerated lag seconds`, with margin for bursts,
+retries, progress/flow events and polling/restart time. Measure actual event
+volume: a 2,000 jobs/s producer emitting four events/job needs at least 960,000
+events for two minutes of lag, before safety margin. Dashboard configuration
+cannot increase the producer's stream cap. A small cap can make at-least-once
+replay impossible; persistence cannot recover already-trimmed events.
+
+`XINFO STREAM` checks the committed cursor against the first retained entry,
+and uses `entries-added`/`max-deleted-entry-id` when supported by Redis 7+/Valkey.
+It logs the unavailable range and increments
+`bullderdash_history_gaps_total{queue}` when the observed gap boundary changes.
+This is a conservative potential-gap signal, **not an exact lost-job count**:
+trimmed events might be non-terminal or already buffered, and deleting the
+previous cursor entry can make a range look unavailable. It is refreshed even
+when the writer is blocked. Older Redis versions expose less trim metadata.
+Stream deletion/errors are logged/counted and retried; neither errors nor gaps
+silently switch to live Redis job scanning.
+
+`bullderdash_history_ingest_lag_seconds{queue}` uses the committed cursor timestamp
+versus now while it is behind the observed tail, and is zero once at/after that
+tail. Monitoring runs separately from enqueue and refreshes idle queues too.
+This measures durable history backlog, not the real-time collector's most-recent
+event lag gauge. A never-used `0-0` cursor can temporarily show a very large
+lag until its first checkpoint; a stream with no events reports zero.
+
+BullMQ `removeOnComplete` / `removeOnFail` can remove job hashes **before history
+catches up**. Prefer retaining hashes for the tolerated lag window when full
+payload/name/lineage is required. If a terminal hash is gone, history saves a
+partial row with event job ID, queue, terminal state and stream timestamp;
+`failedReason` / `returnvalue` are preserved when present. Missing fields remain
+unknown, not invented; full payload/name/trace search may no longer match.
+`bullderdash_history_partial_records_total{queue}` counts fallback attempts,
+including replay/cancellation, not unique partial rows. Already-trimmed events
+cannot even produce a partial row. Normal history retention and deliberate
+initial `$` skips are distinct from ingestion loss; deleting/corrupting the
+SQLite volume or changing queue prefixes/Redis identity is outside cursor
+recovery guarantees.
+
+**Proposed alert-rule changes (text only; infrastructure not edited):**
+replace the compatibility channel-drop-rate alert for normal history with
+`max by (queue) (bullderdash_history_ingest_lag_seconds) > 120` sustained for 5m
+(tune the threshold below the producer's retained-event time budget);
+page on `sum by (queue) (increase(bullderdash_history_gaps_total[10m])) > 0`.
+Also investigate `increase(bullderdash_history_write_errors_total[5m]) > 0`
+with growing lag: a permanent database/schema/storage failure intentionally
+stalls rather than skipping records. Enqueue-wait and write-admission histograms
+distinguish producer pressure from SQLite/retention contention.
+
+On an existing database, startup builds expression indexes over the effective
+end time (`finished_at` when positive, otherwise `created_at`): one global index
+and separate failed/non-failed partial indexes. The one-time build reads retained
+rows, requires disk space, and can delay startup; allow for this during rollout
+without assuming a fixed duration. No record backfill or FTS rebuild is performed.
+The obsolete `(state, finished_at, created_at)` sweep index is then removed; the
+other search indexes remain. TTL DELETEs explicitly select their tier's range
+index so competing state indexes cannot turn them back into retained-row scans.
+Search ordering, zero-finished fallback, disabled TTL tiers and the optional
+newest-first hard cap are unchanged; arbitrary search filters may still sort.
+
+The **Collector & Service Internals** Grafana dashboard includes history panels:
+
+| Signal | Interpretation / action |
+|--------|-------------------------|
+| `bullderdash_store_queue_depth` / `bullderdash_store_queue_capacity` | Channel backlog, excluding the in-flight batch; updated on enqueue/dequeue even while writes are blocked. Sustained growth means persistence is not keeping up. A larger buffer absorbs bursts, not sustained overload. |
+| `bullderdash_store_write_lock_wait_seconds` (`operation`: `ingest` or `sweep`) | In-process admission wait per attempt, including cancelled waits; not SQLite execution time. High ingest wait with long DELETEs suggests trying a smaller sweep batch or more pacing. |
+| `bullderdash_store_sweep_batch_duration_seconds` | Each SQLite DELETE attempt, including pool/SQLite busy wait and FTS trigger/commit work, on success **or error**. Excludes in-process admission and pacing. High values with low admission wait point to pool/SQLite/storage/FTS cost. |
+| `bullderdash_store_sweep_duration_seconds` | Whole sweep on success or error, including admission, retries and pauses. Compare deleted-row rate with ingest, not just sweep wall time. |
+| `bullderdash_store_write_retries_total` (`operation`: `ingest` or `sweep`) | Typed SQLite contention retries. Persistent growth can indicate another writer/maintenance process; distinguish this from internal admission wait. |
+| `bullderdash_store_write_lost_records_total` | Records discarded on write error, exhausted shutdown drain or enqueue after shutdown. Check the accompanying `lost_records` error logs; separate from full-channel `bullderdash_store_writes_dropped_total`. |
+| `bullderdash_store_write_batch_duration_seconds` | Ingest batch duration from write admission through the final attempt, including retries and failures but excluding channel/batch-formation wait (previous versions observed only successful batches). `write_errors_total` counts finally discarded batches, not retry attempts. |
+| `bullderdash_history_enqueue_wait_seconds` | Admission call duration, including cancellation; a growing tail with rising history lag indicates backpressure, not a dropped record. |
+| `bullderdash_history_write_errors_total` | History batches retained after non-contention errors; cursor stays put until storage recovers. |
+| `bullderdash_history_ingest_lag_seconds` (`queue`) | Durable cursor age while behind the stream tail, refreshed even when idle/blocked; sustained growth consumes the producer's event-retention budget. |
+| `bullderdash_history_gaps_total` (`queue`) | New observed unavailable boundaries; investigate any increase, but do not interpret this as an exact lost-job count. |
+| `bullderdash_history_partial_records_total` (`queue`) | Missing-hash fallback attempts, including replay; retain producer job hashes longer to preserve full payload/name/lineage. |
+
+The operation labels have only `ingest` and `sweep` values. No job IDs, queues or
+payloads are added to these labels or error logs. These signals identify where
+time is spent; a full-channel-drop alert alone does **not** identify the sweeper
+as the cause.
+
+Local regression workload (temporary databases only):
+`go test ./internal/store -run TestHistoryReliabilitySoak -count=1 -v` with
+`STORE_RELIABILITY_SOAK=1` compares 10k/100k mixed retained rows, ~1.2KiB indexed
+payloads, ~74 records/s plus a 2048-record burst, a concurrent expiry backlog,
+and an external writer lock. `go test ./internal/store -run '^$' -bench
+BenchmarkRetentionRangeSeek -benchtime=1s` compares no-expiry sweep cost at
+those retained sizes. These are bounded local checks, not production storage
+benchmarks or a guarantee at multi-million-row retention.
+
+An example local run (Windows/amd64, Ryzen 7 PRO 7840U, synthetic common-token
+payloads, warm local storage) measured the following. The soak used a 16,384-record
+channel, 512-record write batches, 500ms flush, **100-row sweep batches** with
+25ms pacing, a 4,000-row expired backlog, and a 200ms external writer transaction.
+The default sweep batch remains 2,000; smaller test batches deliberately exercise
+interleaving.
+
+| Retained rows (90% completed / 10% failed) | Offered / persisted in ~5s (74/s + burst) | Drops / error losses | Sampled peak channel depth | No-expiry sweep benchmark |
+|-----------------------------------------|------------------------------------------|----------------------|----------------------------|---------------------------|
+| 10,000 | 2,418 / 2,418 | 0 / 0 | 1,572 | 105.6us/op |
+| 100,000 | 2,418 / 2,418 | 0 / 0 | 1,595 | 114.8us/op |
+
+Both TTL plans range-seek their own partial expression index with all legacy
+competing indexes present. FTS integrity checks passed after migration, upsert
+and deletion. This does not measure managed-csi latency, cold-cache behavior,
+production payload entropy, million-row startup index builds or long-running
+WAL/checkpoint pressure; none of those should be inferred from these numbers.
+
+Actual 3M-row BullMQ/Valkey stress, mid-burst kill/restart, and deliberate stream
+trimming measurements (including exact commands and limitations) are recorded
+in [`scripts/sim/README.md`](scripts/sim/README.md#measured-phase-2-same-3m-fixture-2026-10-2526).
 
 #### Storage sizing and the FTS index
 
@@ -156,9 +322,11 @@ This has two consequences worth planning for:
   in bounded batches (`STORE_SWEEP_BATCH`, default 2000 rows per statement) and
   loops until the eligible backlog is drained, so one sweep can clear far more
   than a single batch. If sustained throughput outruns the sweeper (resident
-  rows and file size keep climbing past one `completed_TTL`), shorten
-  `STORE_SWEEP_SECONDS` so sweeps run more often and/or raise `STORE_SWEEP_BATCH`
-  so each sweep clears more per statement. Watch `bullderdash_store_sweep_deleted_total`:
+  rows and file size keep climbing past one `completed_TTL`), use the history
+  metrics above to distinguish infrequent sweeps, write admission pressure and
+  slow SQLite work. Shorten `STORE_SWEEP_SECONDS` for infrequent sweeps; tune
+  batch size and pacing together rather than blindly raising the batch size
+  (which can starve ingestion). Watch `bullderdash_store_sweep_deleted_total`:
   it should keep climbing in step with `bullderdash_store_writes_total`.
 
 Sizing guidance:

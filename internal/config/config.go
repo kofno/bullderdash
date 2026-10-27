@@ -27,20 +27,24 @@ type Config struct {
 	WorkloadMetricsMaxJobNames     int
 	WorkloadMetricsStartID         string
 	// Store (SQLite job history) configuration
-	StoreEnabled           bool
-	StoreDBPath            string
-	StoreWriteBuffer       int
-	StoreBatchSize         int
-	StoreFlushMillis       int
-	StoreTraceKeys         []string
+	StoreEnabled             bool
+	HistoryStartID           string
+	HistoryReadBatch         int
+	HistoryGapCheckSeconds   int
+	StoreDBPath              string
+	StoreWriteBuffer         int
+	StoreBatchSize           int
+	StoreFlushMillis         int
+	StoreTraceKeys           []string
 	StoreCompletedTTLHours   int
 	StoreFailedTTLHours      int
 	StoreSweepSeconds        int
 	StoreSweepBatchSize      int
+	StoreSweepPauseMillis    int
 	StoreSweepTimeoutSeconds int
 	StoreMaxRows             int
 	StoreReadConcurrency     int
-	LogLevel               string
+	LogLevel                 string
 }
 
 // Load reads configuration from environment variables with sensible defaults
@@ -65,6 +69,9 @@ func Load() *Config {
 		WorkloadMetricsMaxJobNames:     getEnvInt("WORKLOAD_METRICS_MAX_JOB_NAMES_PER_QUEUE", 100),
 		WorkloadMetricsStartID:         getEnv("WORKLOAD_METRICS_START_ID", "$"),
 		StoreEnabled:                   getEnvBool("STORE_ENABLED", false),
+		HistoryStartID:                 getEnv("HISTORY_START_ID", "$"),
+		HistoryReadBatch:               getEnvInt("HISTORY_READ_BATCH", 1000),
+		HistoryGapCheckSeconds:         getEnvInt("HISTORY_GAP_CHECK_SECONDS", 10),
 		StoreDBPath:                    getEnv("STORE_DB_PATH", "/data/history.db"),
 		StoreWriteBuffer:               getEnvInt("STORE_WRITE_BUFFER", 4096),
 		StoreBatchSize:                 getEnvInt("STORE_BATCH_SIZE", 256),
@@ -74,6 +81,7 @@ func Load() *Config {
 		StoreFailedTTLHours:            getEnvInt("STORE_FAILED_TTL_HOURS", 336),
 		StoreSweepSeconds:              getEnvInt("STORE_SWEEP_SECONDS", 300),
 		StoreSweepBatchSize:            getEnvInt("STORE_SWEEP_BATCH", 2000),
+		StoreSweepPauseMillis:          getEnvInt("STORE_SWEEP_PAUSE_MILLIS", 25),
 		StoreSweepTimeoutSeconds:       getEnvInt("STORE_SWEEP_TIMEOUT_SECONDS", 0),
 		StoreMaxRows:                   getEnvInt("STORE_MAX_ROWS", 0),
 		StoreReadConcurrency:           getEnvInt("STORE_READ_CONCURRENCY", 16),

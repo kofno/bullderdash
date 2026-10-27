@@ -173,6 +173,21 @@ var (
 	)
 
 	// Store (SQLite job history) metrics
+	HistoryEnqueueWait = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name: "bullderdash_history_enqueue_wait_seconds", Help: "Time waiting to admit a history item, including cancelled waits", Buckets: prometheus.DefBuckets,
+	})
+	HistoryLag = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "bullderdash_history_ingest_lag_seconds", Help: "Age of committed history cursor while behind the observed stream tail; zero when caught up",
+	}, []string{"queue"})
+	HistoryGaps = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "bullderdash_history_gaps_total", Help: "Distinct detected ranges of unavailable Redis stream events; not an exact lost-job count",
+	}, []string{"queue"})
+	HistoryPartial = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "bullderdash_history_partial_records_total", Help: "Missing-hash terminal observations attempted as partial history, including cancelled/replayed attempts",
+	}, []string{"queue"})
+	HistoryWriteErrors = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "bullderdash_history_write_errors_total", Help: "Non-contention history batch failures retained for retry without advancing cursors",
+	})
 	StoreWritesTotal = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Name: "bullderdash_store_writes_total",
@@ -190,14 +205,46 @@ var (
 	StoreWriteErrors = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Name: "bullderdash_store_write_errors_total",
-			Help: "Total number of failed job-history write batches",
+			Help: "Total number of finally discarded job-history write batches; excludes retried attempts",
 		},
 	)
+
+	StoreQueueDepth = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "bullderdash_store_queue_depth",
+		Help: "Records waiting in the history channel, excluding the in-flight batch",
+	})
+	StoreQueueCapacity = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "bullderdash_store_queue_capacity",
+		Help: "Capacity of the history writer channel",
+	})
+	StoreWriteLost = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "bullderdash_store_write_lost_records_total",
+		Help: "Records discarded after non-retryable write failures, shutdown deadline exhaustion or post-shutdown enqueue; excludes full-channel drops",
+	})
+	StoreWriteRetries = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "bullderdash_store_write_retries_total",
+		Help: "SQLite BUSY or LOCKED attempts scheduled for retry",
+	}, []string{"operation"})
+	StoreWriteLockWait = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "bullderdash_store_write_lock_wait_seconds",
+		Help:    "In-process write admission wait per attempt, including cancelled waits; excludes SQLite lock wait",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"operation"})
+	StoreSweepDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "bullderdash_store_sweep_duration_seconds",
+		Help:    "Total sweep duration including admission, SQLite work, retries and pacing, on success or error",
+		Buckets: []float64{.01, .05, .1, .5, 1, 5, 10, 30, 60, 120, 300, 600},
+	})
+	StoreSweepBatchDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "bullderdash_store_sweep_batch_duration_seconds",
+		Help:    "Duration per DELETE attempt including pool/SQLite lock wait and FTS triggers, on success or error; excludes admission and pacing",
+		Buckets: prometheus.DefBuckets,
+	})
 
 	StoreWriteBatchDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Name:    "bullderdash_store_write_batch_duration_seconds",
-			Help:    "Latency of SQLite job-history write batches",
+			Help:    "End-to-end history batch duration including admission and retries, on success or error",
 			Buckets: prometheus.DefBuckets,
 		},
 	)

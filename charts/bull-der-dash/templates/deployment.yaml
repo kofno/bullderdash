@@ -125,12 +125,20 @@ spec:
               value: {{ .Values.env.store.sweepSeconds | quote }}
             - name: STORE_SWEEP_BATCH
               value: {{ .Values.env.store.sweepBatch | quote }}
+            - name: STORE_SWEEP_PAUSE_MILLIS
+              value: {{ .Values.env.store.sweepPauseMillis | quote }}
             - name: STORE_SWEEP_TIMEOUT_SECONDS
               value: {{ .Values.env.store.sweepTimeoutSeconds | quote }}
             - name: STORE_MAX_ROWS
               value: {{ .Values.env.store.maxRows | quote }}
             - name: STORE_READ_CONCURRENCY
               value: {{ .Values.env.store.readConcurrency | quote }}
+            - name: HISTORY_START_ID
+              value: {{ .Values.env.store.historyStartId | quote }}
+            - name: HISTORY_READ_BATCH
+              value: {{ .Values.env.store.historyReadBatch | quote }}
+            - name: HISTORY_GAP_CHECK_SECONDS
+              value: {{ .Values.env.store.historyGapCheckSeconds | quote }}
             - name: LOG_LEVEL
               value: {{ .Values.env.logLevel | quote }}
             {{- with .Values.extraEnv }}
@@ -178,4 +186,3 @@ spec:
           persistentVolumeClaim:
             claimName: {{ .Values.persistence.existingClaim | default (printf "%s-data" (include "bull-der-dash.fullname" .)) }}
       {{- end }}
-

@@ -15,17 +15,22 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kofno/bullderdash/internal/metrics"
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
 )
 
 // Record is a single job observation handed to the writer. Zero-valued
 // optional fields (empty strings, zero timestamps) are treated as "unknown"
 // and will not overwrite previously persisted non-zero values on upsert.
 type Record struct {
+	StreamID       string // Redis stream checkpoint, committed with this observation
+	CheckpointOnly bool
 	ID             string
 	Queue          string
 	Name           string
@@ -105,6 +110,7 @@ type Retention struct {
 	FailedTTL    time.Duration
 	MaxRows      int64
 	BatchSize    int64
+	Pause        time.Duration // zero uses 25ms; negative disables pacing
 }
 
 // Config configures the store and its async writer.
@@ -117,10 +123,15 @@ type Config struct {
 
 // Store owns the database handle and the background writer goroutine.
 type Store struct {
-	db   *sql.DB
-	cfg  Config
-	recs chan Record
-	done chan struct{}
+	db        *sql.DB
+	cfg       Config
+	recs      chan Record
+	done      chan struct{}
+	writeGate chan struct{}
+	queueMu   sync.Mutex
+	stopping  bool // protected by queueMu
+	space     chan struct{}
+	stopped   chan struct{}
 }
 
 const defaultLimit = 100
@@ -132,6 +143,10 @@ const maxLimit = 1000
 // sweep deadline, so a large backlog drains incrementally instead of a single
 // oversized DELETE repeatedly blowing the context deadline and rolling back.
 const defaultSweepBatch = 2000
+
+const effectiveEndSQL = `(CASE WHEN finished_at > 0 THEN finished_at ELSE created_at END)`
+const failedRetentionSQL = `state = 'Failed' AND ` + effectiveEndSQL + ` < ?`
+const completedRetentionSQL = `state <> 'Failed' AND ` + effectiveEndSQL + ` < ?`
 
 // New opens (creating if needed) the SQLite database, applies migrations and
 // returns a ready Store. Call Run to start the async writer.
@@ -148,8 +163,9 @@ func New(cfg Config) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
-	// Serialize writers at the pool level; WAL still allows concurrent readers
-	// via separate connections opened on demand.
+	// The write gate serializes our mutations; keep separate WAL readers.
+	// Mutations write first, so they do not need _txlock=immediate to avoid
+	// read-snapshot upgrades. Keep default transaction semantics for readers.
 	db.SetMaxOpenConns(8)
 	db.SetConnMaxIdleTime(5 * time.Minute)
 
@@ -158,12 +174,17 @@ func New(cfg Config) (*Store, error) {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 
-	return &Store{
-		db:   db,
-		cfg:  cfg,
-		recs: make(chan Record, cfg.WriteBuffer),
-		done: make(chan struct{}),
-	}, nil
+	s := &Store{
+		db:        db,
+		cfg:       cfg,
+		recs:      make(chan Record, cfg.WriteBuffer),
+		done:      make(chan struct{}),
+		writeGate: make(chan struct{}, 1),
+		space:     make(chan struct{}, 1),
+		stopped:   make(chan struct{}),
+	}
+	s.updateQueueMetrics()
+	return s, nil
 }
 
 func normalize(cfg Config) Config {
@@ -184,6 +205,7 @@ func normalize(cfg Config) Config {
 
 func migrate(db *sql.DB) error {
 	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS ingest_cursor (queue TEXT PRIMARY KEY, last_id TEXT NOT NULL, updated_at INTEGER NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS job_history (
 			rowid           INTEGER PRIMARY KEY AUTOINCREMENT,
 			id              TEXT NOT NULL,
@@ -205,7 +227,10 @@ func migrate(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_job_history_state ON job_history(state)`,
 		`CREATE INDEX IF NOT EXISTS idx_job_history_name ON job_history(name)`,
 		`CREATE INDEX IF NOT EXISTS idx_job_history_finished ON job_history(finished_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_job_history_sweep ON job_history(state, finished_at, created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_job_history_end ON job_history(` + effectiveEndSQL + `)`,
+		`CREATE INDEX IF NOT EXISTS idx_job_history_failed_end ON job_history(` + effectiveEndSQL + `) WHERE state = 'Failed'`,
+		`CREATE INDEX IF NOT EXISTS idx_job_history_completed_end ON job_history(` + effectiveEndSQL + `) WHERE state <> 'Failed'`,
+		`DROP INDEX IF EXISTS idx_job_history_sweep`,
 		`CREATE VIRTUAL TABLE IF NOT EXISTS job_fts USING fts5(
 			id, name, trace_id, last_error, data,
 			content='job_history', content_rowid='rowid',
@@ -239,11 +264,124 @@ func migrate(db *sql.DB) error {
 // collector loop from disk stalls.
 func (s *Store) Enqueue(rec Record) {
 	normalizeRecord(&rec)
+	s.queueMu.Lock()
+	defer s.queueMu.Unlock()
+	if s.stopping {
+		metrics.StoreWriteLost.Inc()
+		log.Printf("history enqueue after shutdown: lost_records=1")
+		return
+	}
 	select {
 	case s.recs <- rec:
 	default:
 		metrics.StoreWritesDropped.Inc()
 	}
+	s.updateQueueMetrics()
+}
+
+func (s *Store) updateQueueMetrics() {
+	metrics.StoreQueueDepth.Set(float64(len(s.recs)))
+	metrics.StoreQueueCapacity.Set(float64(cap(s.recs)))
+}
+
+func (s *Store) received() {
+	s.queueMu.Lock()
+	defer s.queueMu.Unlock()
+	s.updateQueueMetrics()
+	select {
+	case s.space <- struct{}{}:
+	default:
+	}
+}
+
+// EnqueueWait admits history without discarding on saturation. Cancellation
+// leaves the caller's cursor unchanged so the event can be replayed.
+func (s *Store) EnqueueWait(ctx context.Context, rec Record) error {
+	start := time.Now()
+	defer func() {
+		metrics.HistoryEnqueueWait.Observe(time.Since(start).Seconds())
+		// Receives can coalesce notifications. Pass remaining capacity to
+		// another waiter even if this admission was cancelled.
+		s.queueMu.Lock()
+		if len(s.recs) < cap(s.recs) {
+			select {
+			case s.space <- struct{}{}:
+			default:
+			}
+		}
+		s.queueMu.Unlock()
+	}()
+	normalizeRecord(&rec)
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		s.queueMu.Lock()
+		if s.stopping {
+			s.queueMu.Unlock()
+			return errors.New("history writer stopped")
+		}
+		select {
+		case s.recs <- rec:
+			s.updateQueueMetrics()
+			s.queueMu.Unlock()
+			return nil
+		default:
+			s.queueMu.Unlock()
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-s.stopped:
+			return errors.New("history writer stopped")
+		case <-s.space:
+		}
+	}
+}
+
+func (s *Store) Cursor(ctx context.Context, queue string) (string, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT last_id FROM ingest_cursor WHERE queue=?`, queue).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
+}
+
+// CompareStreamIDs compares both unsigned components, never lexicographically.
+func CompareStreamIDs(a, b string) (int, error) {
+	parse := func(id string) ([2]uint64, error) {
+		var out [2]uint64
+		parts := strings.Split(id, "-")
+		if len(parts) != 2 {
+			return out, fmt.Errorf("invalid stream ID %q", id)
+		}
+		for i := range parts {
+			v, err := strconv.ParseUint(parts[i], 10, 64)
+			if err != nil {
+				return out, fmt.Errorf("invalid stream ID %q: %w", id, err)
+			}
+			out[i] = v
+		}
+		return out, nil
+	}
+	x, err := parse(a)
+	if err != nil {
+		return 0, err
+	}
+	y, err := parse(b)
+	if err != nil {
+		return 0, err
+	}
+	for i := range x {
+		if x[i] < y[i] {
+			return -1, nil
+		}
+		if x[i] > y[i] {
+			return 1, nil
+		}
+	}
+	return 0, nil
 }
 
 func normalizeRecord(rec *Record) {
@@ -280,30 +418,31 @@ func (s *Store) Run(ctx context.Context) {
 		if len(batch) == 0 {
 			return
 		}
-		if err := s.writeBatch(ctx, batch); err != nil && ctx.Err() == nil {
-			metrics.StoreWriteErrors.Inc()
+		for {
+			if err := s.writeBatch(ctx, batch); err != nil {
+				if ctx.Err() != nil {
+					return // Keep the exact interrupted batch for the shutdown drain.
+				}
+				if hasCheckpoint(batch) {
+					metrics.HistoryWriteErrors.Inc()
+					log.Printf("history writer stalled; retaining batch and cursor: %v", err)
+					if pause(ctx, time.Second) != nil {
+						return
+					}
+					continue
+				}
+				s.lostBatch(batch, err)
+			}
+			break
 		}
 		batch = batch[:0]
 	}
 
-	for {
+	for ctx.Err() == nil {
 		select {
 		case <-ctx.Done():
-			// Best-effort drain of whatever is already buffered.
-			for {
-				select {
-				case rec := <-s.recs:
-					batch = append(batch, rec)
-					if len(batch) >= s.cfg.BatchSize {
-						s.flushDetached(batch)
-						batch = batch[:0]
-					}
-				default:
-					s.flushDetached(batch)
-					return
-				}
-			}
 		case rec := <-s.recs:
+			s.received()
 			batch = append(batch, rec)
 			if len(batch) >= s.cfg.BatchSize {
 				flush()
@@ -312,18 +451,107 @@ func (s *Store) Run(ctx context.Context) {
 			flush()
 		}
 	}
+	drainCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	// Stop admission atomically with the snapshot: an in-flight collector may
+	// still enqueue after its context is cancelled.
+	s.queueMu.Lock()
+	s.stopping = true
+	close(s.stopped)
+	remaining := len(s.recs)
+	s.queueMu.Unlock()
+	blocked := !s.flushFinal(drainCtx, batch)
+	batch = batch[:0]
+	for i := 0; i < remaining; i++ {
+		rec := <-s.recs
+		s.received()
+		batch = append(batch, rec)
+		if len(batch) >= s.cfg.BatchSize {
+			if !blocked {
+				blocked = !s.flushFinal(drainCtx, batch)
+			}
+			batch = batch[:0]
+		}
+	}
+	if !blocked {
+		s.flushFinal(drainCtx, batch)
+	}
 }
 
-// flushDetached writes a final batch during shutdown using a fresh, short
-// timeout context so a cancelled parent context does not abort the drain.
-func (s *Store) flushDetached(batch []Record) {
-	if len(batch) == 0 {
-		return
+func hasCheckpoint(batch []Record) bool {
+	for _, r := range batch {
+		if r.StreamID != "" {
+			return true
+		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	return false
+}
+
+// All final batches share one deadline, not a fresh timeout per batch.
+func (s *Store) flushFinal(ctx context.Context, batch []Record) bool {
+	if len(batch) == 0 {
+		return true
+	}
 	if err := s.writeBatch(ctx, batch); err != nil {
-		metrics.StoreWriteErrors.Inc()
+		if hasCheckpoint(batch) {
+			log.Printf("history shutdown left uncommitted events for replay: %v", err)
+			return false
+		}
+		s.lostBatch(batch, err)
+	}
+	return true
+}
+
+func (s *Store) lostBatch(batch []Record, err error) {
+	metrics.StoreWriteErrors.Inc()
+	metrics.StoreWriteLost.Add(float64(len(batch)))
+	log.Printf("history write failed: lost_records=%d: %v", len(batch), err)
+}
+
+func retryable(err error) bool {
+	var sqliteErr *sqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		return false
+	}
+	code := sqliteErr.Code() & 0xff
+	return code == 5 || code == 6 // SQLITE_BUSY / SQLITE_LOCKED, including extended codes
+}
+
+func pause(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func (s *Store) mutate(ctx context.Context, operation string, fn func() error) error {
+	backoff := 10 * time.Millisecond
+	for {
+		start := time.Now()
+		select {
+		case <-ctx.Done():
+			metrics.StoreWriteLockWait.WithLabelValues(operation).Observe(time.Since(start).Seconds())
+			return ctx.Err()
+		case s.writeGate <- struct{}{}:
+		}
+		metrics.StoreWriteLockWait.WithLabelValues(operation).Observe(time.Since(start).Seconds())
+		err := ctx.Err()
+		if err == nil {
+			err = fn()
+		}
+		<-s.writeGate
+		if err == nil || !retryable(err) {
+			return err
+		}
+		metrics.StoreWriteRetries.WithLabelValues(operation).Inc()
+		if err := pause(ctx, backoff); err != nil {
+			return err
+		}
+		backoff = min(backoff*2, 250*time.Millisecond)
 	}
 }
 
@@ -348,32 +576,81 @@ ON CONFLICT(queue, id) DO UPDATE SET
 
 func (s *Store) writeBatch(ctx context.Context, batch []Record) error {
 	start := time.Now()
+	defer func() { metrics.StoreWriteBatchDuration.Observe(time.Since(start).Seconds()) }()
+	err := s.mutate(ctx, "ingest", func() error { return s.writeBatchOnce(ctx, batch) })
+	if err == nil {
+		var records int
+		for _, r := range batch {
+			if !r.CheckpointOnly {
+				records++
+			}
+		}
+		metrics.StoreWritesTotal.Add(float64(records))
+	}
+	return err
+}
+
+func (s *Store) writeBatchOnce(ctx context.Context, batch []Record) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
+	defer tx.Rollback()
 	stmt, err := tx.PrepareContext(ctx, upsertSQL)
 	if err != nil {
-		_ = tx.Rollback()
 		return err
 	}
 	defer stmt.Close()
 
 	now := time.Now().UnixMilli()
+	cursors := make(map[string]string)
 	for _, r := range batch {
+		if r.StreamID != "" {
+			id := cursors[r.Queue]
+			if id == "" {
+				id = "0-0"
+			}
+			cmp, err := CompareStreamIDs(r.StreamID, id)
+			if err != nil {
+				return err
+			}
+			if cmp > 0 || cursors[r.Queue] == "" {
+				cursors[r.Queue] = r.StreamID
+			}
+		}
+		if r.CheckpointOnly {
+			continue
+		}
 		if _, err := stmt.ExecContext(ctx,
 			r.ID, r.Queue, r.Name, r.State, r.Attempts, r.ExecutionDepth, r.TraceID,
 			r.CreatedAtMs, r.FinishedAtMs, r.LastError, r.Data, r.Opts, now,
 		); err != nil {
-			_ = tx.Rollback()
+			return err
+		}
+	}
+	for queue, id := range cursors {
+		var old string
+		err := tx.QueryRowContext(ctx, `SELECT last_id FROM ingest_cursor WHERE queue=?`, queue).Scan(&old)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if old != "" {
+			cmp, err := CompareStreamIDs(id, old)
+			if err != nil {
+				return err
+			}
+			if cmp <= 0 {
+				continue
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO ingest_cursor(queue,last_id,updated_at) VALUES(?,?,?)
+				ON CONFLICT(queue) DO UPDATE SET last_id=excluded.last_id,updated_at=excluded.updated_at`, queue, id, now); err != nil {
 			return err
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	metrics.StoreWriteBatchDuration.Observe(time.Since(start).Seconds())
-	metrics.StoreWritesTotal.Add(float64(len(batch)))
 	return nil
 }
 
@@ -528,7 +805,12 @@ func (s *Store) Get(ctx context.Context, id string) (*JobDetail, error) {
 // It returns the total number of rows deleted.
 func (s *Store) Sweep(ctx context.Context, r Retention) (int64, error) {
 	now := time.Now()
+	defer func() { metrics.StoreSweepDuration.Observe(time.Since(now).Seconds()) }()
 	var total int64
+	delay := r.Pause
+	if delay == 0 {
+		delay = 25 * time.Millisecond
+	}
 
 	batch := r.BatchSize
 	if batch <= 0 {
@@ -541,23 +823,36 @@ func (s *Store) Sweep(ctx context.Context, r Retention) (int64, error) {
 	// reflected in the sweep_deleted metric as it goes. The loop stops when a
 	// batch deletes fewer than the batch size (backlog drained) or the context
 	// is cancelled.
-	del := func(where string, args ...any) error {
-		q := `DELETE FROM job_history WHERE rowid IN (
-			SELECT rowid FROM job_history WHERE ` + where + ` LIMIT ?)`
+	del := func(index, where string, args ...any) error {
+		q := sweepDeleteSQL(index, where)
 		for {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
 			params := append(append([]any(nil), args...), batch)
-			res, err := s.db.ExecContext(ctx, q, params...)
+			var n int64
+			err := s.mutate(ctx, "sweep", func() error {
+				start := time.Now()
+				defer func() { metrics.StoreSweepBatchDuration.Observe(time.Since(start).Seconds()) }()
+				res, err := s.db.ExecContext(ctx, q, params...)
+				if err != nil {
+					return err
+				}
+				n, err = res.RowsAffected()
+				return err
+			})
 			if err != nil {
 				return err
 			}
-			n, _ := res.RowsAffected()
 			total += n
 			metrics.StoreSweepDeleted.Add(float64(n))
 			if n < batch {
 				return nil
+			}
+			if delay > 0 {
+				if err := pause(ctx, delay); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -565,7 +860,8 @@ func (s *Store) Sweep(ctx context.Context, r Retention) (int64, error) {
 	if r.FailedTTL > 0 {
 		cutoff := now.Add(-r.FailedTTL).UnixMilli()
 		if err := del(
-			`state = 'Failed' AND (CASE WHEN finished_at > 0 THEN finished_at ELSE created_at END) < ?`,
+			"idx_job_history_failed_end",
+			failedRetentionSQL,
 			cutoff,
 		); err != nil {
 			return total, err
@@ -574,7 +870,8 @@ func (s *Store) Sweep(ctx context.Context, r Retention) (int64, error) {
 	if r.CompletedTTL > 0 {
 		cutoff := now.Add(-r.CompletedTTL).UnixMilli()
 		if err := del(
-			`state <> 'Failed' AND (CASE WHEN finished_at > 0 THEN finished_at ELSE created_at END) < ?`,
+			"idx_job_history_completed_end",
+			completedRetentionSQL,
 			cutoff,
 		); err != nil {
 			return total, err
@@ -582,9 +879,10 @@ func (s *Store) Sweep(ctx context.Context, r Retention) (int64, error) {
 	}
 	if r.MaxRows > 0 {
 		if err := del(
+			"",
 			`rowid IN (
 				SELECT rowid FROM job_history
-				ORDER BY (CASE WHEN finished_at > 0 THEN finished_at ELSE created_at END) DESC
+				ORDER BY `+effectiveEndSQL+` DESC
 				LIMIT -1 OFFSET ?
 			)`,
 			r.MaxRows,
@@ -593,6 +891,17 @@ func (s *Store) Sweep(ctx context.Context, r Retention) (int64, error) {
 		}
 	}
 	return total, nil
+}
+
+func sweepDeleteSQL(index, where string) string {
+	from := "job_history"
+	if index != "" {
+		// Without this, competing state indexes can win over a range seek.
+		// Both the index and predicate are internal constants, never user input.
+		from += " INDEXED BY " + index
+	}
+	return `DELETE FROM job_history WHERE rowid IN (
+		SELECT rowid FROM ` + from + ` WHERE ` + where + ` LIMIT ?)`
 }
 
 // Close stops the writer (callers should cancel Run's context first) and

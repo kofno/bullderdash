@@ -58,22 +58,24 @@
 Search is decoupled from the live Redis path. The history store is fed only by
 the workload collector, so `STORE_ENABLED=true` without
 `WORKLOAD_METRICS_ENABLED=true` does not ingest new history (existing records remain
-searchable until retention removes them). A background collector tails the
-BullMQ event streams and hands terminal (completed/failed) jobs to a background
-writer that persists them to an embedded SQLite database. The search console and
+searchable until retention removes them). A background history reader tails the
+BullMQ event streams independently from the metrics reader and hands terminal
+jobs to a blocking buffered writer. Records and per-queue stream checkpoints
+commit atomically to SQLite. The search console and
 JSON search API read exclusively from SQLite, so search never scans live Redis.
 
 ```
 Redis BullMQ event streams
    │  (background tail)
    ▼
-Workloadmetrics Collector ──> Prometheus metrics (in-memory)
-   │  terminal jobs (HGETALL + flow-lineage lookup per job)
+Metrics reader ($, HMGET) ──> Prometheus metrics (in-memory)
+History reader (durable cursor, HGETALL + lineage, shared discovery)
+   │  terminal jobs and cursor-only checkpoints
    ▼
-Bounded channel (STORE_WRITE_BUFFER; non-blocking, drops when full)
+Bounded channel (STORE_WRITE_BUFFER; waits when full)
    │
    ▼
-Store Writer (batched) ──> Embedded SQLite (WAL) ──> FTS5 full-text index
+Store Writer (records + cursor atomically) ──> SQLite (WAL) ──> FTS5
                                    ▲                        │
          Sweeper (tiered TTL) ─────┘           /console, /v1/search, /v1/jobs/{id}
          failures kept longer than successes            (read-only)
@@ -291,13 +293,15 @@ Main Goroutine
   ├─> Dashboard snapshot poller (METRICS_POLL_SECONDS)
   │
   ├─> Workload collector (WORKLOAD_METRICS_ENABLED)
-  │     │ Single loop: XREAD all queue event streams, then per terminal
-  │     │ event HGETALL + lineage lookup, then non-blocking Enqueue
+  │     │ Live metrics loop: XREAD at $, then terminal-event HMGET
+  │     │ Shared discovery feeds independent per-queue history readers:
+  │     │ XREAD at durable cursor, HGETALL + lineage, blocking EnqueueWait
+  │     │ Independent XINFO monitors committed lag and unavailable ranges
   │     ▼
   ├─> Store writer (STORE_ENABLED) — single goroutine, batched upserts
   │
-  ├─> Retention sweeper (STORE_SWEEP_SECONDS) — batched DELETEs that
-  │     contend with the writer for SQLite's single write lock
+  ├─> Retention sweeper (STORE_SWEEP_SECONDS) — tier-indexed DELETEs,
+  │     per-batch write admission shared with ingestion, paced between batches
   │
   └─> Signal handling: SIGINT/SIGTERM → stop pollers, drain writer,
         close SQLite, then graceful HTTP shutdown
@@ -394,5 +398,4 @@ single replica (one RWO PVC + `Recreate` strategy); scale vertically instead.
 1. **Redis connection limit** - Use connection pooling (already implemented)
 2. **Job list size** - Job lists are paged (bounded range per request)
 3. **Metrics cardinality** - Workload metrics cap job-name labels per queue (`WORKLOAD_METRICS_MAX_JOB_NAMES_PER_QUEUE`)
-4. **SQLite single writer** - History persistence is single-replica; the writer and the retention sweeper share one write lock, and the writer drops records (`bullderdash_store_writes_dropped_total`) when `STORE_WRITE_BUFFER` fills. Bound read concurrency with `STORE_READ_CONCURRENCY`
-
+4. **SQLite single writer** - History persistence is single-replica; ingestion and retention serialize mutations with cancellation-aware admission per DELETE batch. History waits on channel saturation, commits records/cursors atomically, and replays uncommitted events after restart. Permanent history errors stall and log rather than skipping a batch. Compatibility `Enqueue` can still drop; normal history does not use it. Redis stream retention must cover the tolerated lag window: gaps/partial payloads remain possible if events/hashes expire. Bound read concurrency with `STORE_READ_CONCURRENCY`; see `DOCS.md` for producer sizing, alerts, migration/startup cost and diagnosis.
